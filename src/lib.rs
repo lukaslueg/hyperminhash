@@ -1,3 +1,43 @@
+//! Very fast, constant memory-footprint cardinality approximation, including intersection and union operation.
+//! A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash).
+//!
+//! ```rust
+//! use hyperminhash::Sketch;
+//!
+//! // A `Sketch` can approximate the unique count of elements it has seen over it's lifetime.
+//! let mut sk = Sketch::default();
+//!
+//! // After initialization, a `Sketch` will never allocate again.
+//!
+//! // Elements added to Sketch need to implement `std::hash::Hash`
+//! sk.add("foobar");
+//! sk.add(1);
+//! sk.add(2);
+//! sk.add(vec![3, 4, 5]);
+//! for i in 0..5000 {
+//!     sk.add(i);
+//! }
+//! // There will be some error in the count
+//! assert!(sk.cardinality() > 4_900.0 && sk.cardinality() < 5_100.0);
+//!
+//!
+//! // Using `std::iter::FromIterator`
+//! let sketch1 = (0..10_000).collect::<Sketch>();
+//! let sketch2 = (5_000..15_000).collect::<Sketch>();
+//! assert!(sketch1.cardinality() > 9_800.0 && sketch1.cardinality() < 10_200.0);
+//! assert!(sketch2.cardinality() > 9_800.0 && sketch2.cardinality() < 10_200.0);
+//!
+//! // The intersection of two sketches yields the approximate number of unique
+//! // elements that are in both sets.
+//! let i = sketch1.intersection(&sketch2);
+//! assert!(i > 4_800.0 && i < 5_200.0);
+//!
+//! // Merge sketch1 with sketch2
+//! let mut sketch1 = sketch1;
+//! sketch1.union(&sketch2);
+//! assert!(sketch1.cardinality() > 14_800.0 && sketch1.cardinality() < 15_200.0);
+//! ```
+
 use std::hash;
 
 const P: u32 = 14;
@@ -23,7 +63,8 @@ fn beta(ez: f64) -> f64 {
         + 0.000_424_19 * zl.powi(7)
 }
 
-#[derive(Clone)]
+/// Records the approximate number of unique elements it has seen over it's lifetime.
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct Sketch {
     regs: Vec<u16>,
 }
@@ -39,9 +80,7 @@ impl Default for Sketch {
 impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut sk = Self::default();
-        for v in iter.into_iter() {
-            sk.add(v)
-        }
+        iter.into_iter().for_each(|v| sk.add(v));
         sk
     }
 }
