@@ -2,6 +2,9 @@
 name = "hyperminhash"
 version = "0.1.0"
 authors = ["Lukas Lueg <lukas.lueg@gmail.com>"]
+repository = "https://github.com/lukaslueg/hyperminhash"
+documentation = "https://docs.rs/hyperminhash"
+description = "Fast, constant-memory cardinality approximation"
 edition = "2018"
 readme = "README.md"
 license = "MIT"

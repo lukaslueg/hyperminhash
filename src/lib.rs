@@ -7,7 +7,7 @@
 //! // A `Sketch` can approximate the unique count of elements it has seen over it's lifetime.
 //! let mut sk = Sketch::default();
 //!
-//! // After initialization, a `Sketch` will never allocate again.
+//! // After initialization, a `Sketch` will never allocate.
 //!
 //! // Elements added to Sketch need to implement `std::hash::Hash`
 //! sk.add("foobar");
@@ -51,6 +51,8 @@ const TQ: u32 = 1 << Q;
 const TR: u32 = 1 << R;
 const C: f64 = 0.169_919_487_159_739_1;
 
+type Regs = [u16; M as usize];
+
 fn beta(ez: f64) -> f64 {
     let zl = (ez + 1.0).ln();
     -0.370_393_911 * ez
@@ -64,16 +66,22 @@ fn beta(ez: f64) -> f64 {
 }
 
 /// Records the approximate number of unique elements it has seen over it's lifetime.
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Sketch {
-    regs: Vec<u16>,
+    regs: Regs,
 }
 
 impl Default for Sketch {
     fn default() -> Self {
         Self {
-            regs: vec![0; M as usize],
+            regs: [0; M as usize],
         }
+    }
+}
+
+impl From<&[u16; M as usize]> for Sketch {
+    fn from(regs: &Regs) -> Self {
+        Self { regs: *regs }
     }
 }
 
