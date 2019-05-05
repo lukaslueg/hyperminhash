@@ -6,7 +6,7 @@ A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash) for R
 use std::{io, io::Bufread, fs};
 
 let reader = io::BufReader::new(fs::File::open(fname)?).lines();
-let sketch = reader.collect::<io::Result<hyperminhash::Sketch>>();
+let sketch = reader.collect::<io::Result<hyperminhash::Sketch>>()?;
 println!("{}", sketch.cardinality());
 ```
 
