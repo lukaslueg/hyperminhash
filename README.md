@@ -23,4 +23,4 @@ Union via `cat strings1.txt string2.txt \| sort \| uniq \| wc -l` | 84.4 secs | 
 Intersection via `comm -12 <(sort string1.txt) <(sort strings2.txt) \| wc -l` | 25.3 secs | 428,370
 Cardinality via Hyperminhash | 0.69 secs | 9,861,113
 Union via Hyperminhash | 1.59 secs | 19,042,941
-Intersecion via Hyperminhash | 1.52 secs | 430,977
+Intersection via Hyperminhash | 1.52 secs | 430,977
