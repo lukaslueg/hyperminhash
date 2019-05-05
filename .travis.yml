@@ -5,4 +5,5 @@ rust:
   - nightly
 
 script:
-  - cargo test
+  - cargo test --no-default-features
+  - cargo test --all-features

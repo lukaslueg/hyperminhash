@@ -1,6 +1,16 @@
 //! Very fast, constant memory-footprint cardinality approximation, including intersection and union operation.
 //! A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash).
 //!
+//! As with other cardinality estimators, `Hyperminhash` has two advantages when counting very large
+//! sets or streams of elements:
+//! * It uses a single data structure that never grows while counting elements. The structure
+//! currently consumes 32kb of memory, allocated on the stack.
+//! * Because there are no indirections due to allocations, the amount of work done for counting
+//! a marginal element stays constant.
+//!
+//! Given that, a `Vec` or `HashSet` is usually faster when counting small sets. When counting
+//! streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
+//!
 //! ```rust
 //! use hyperminhash::Sketch;
 //!
@@ -36,6 +46,18 @@
 //! let mut sketch1 = sketch1;
 //! sketch1.union(&sketch2);
 //! assert!(sketch1.cardinality() > 14_800.0 && sketch1.cardinality() < 15_200.0);
+//!
+//!
+//! // If the `serialize`-feature is used, Sketches can be serialized/deserialized
+//! // from any Reader/Writer.
+//! #[cfg(feature = "serialize")]
+//! {
+//!     let mut buffer = Vec::new();
+//!     sketch1.save(&mut buffer).expect("Failed to write");
+//!
+//!     let sketch2 = Sketch::load(&buffer[..]).expect("Failed to read");
+//!     assert_eq!(sketch1.cardinality(), sketch2.cardinality());
+//! }
 //! ```
 
 use std::hash;
@@ -79,12 +101,6 @@ impl Default for Sketch {
     }
 }
 
-impl From<&[u16; M as usize]> for Sketch {
-    fn from(regs: &Regs) -> Self {
-        Self { regs: *regs }
-    }
-}
-
 impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut sk = Self::default();
@@ -94,6 +110,29 @@ impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
 }
 
 impl Sketch {
+    /// Serialize this Sketch to the given writer
+    #[cfg(feature = "serialize")]
+    pub fn save<W: std::io::Write>(&self, writer: W) -> std::io::Result<()> {
+        use byteorder::WriteBytesExt;
+        let mut writer = writer;
+        for r in self.regs.iter() {
+            writer.write_u16::<byteorder::LittleEndian>(*r)?;
+        }
+        Ok(())
+    }
+
+    /// Deserialize a Sketch from the given reader
+    #[cfg(feature = "serialize")]
+    pub fn load<R: std::io::Read>(reader: R) -> std::io::Result<Self> {
+        use byteorder::ReadBytesExt;
+        let mut reader = reader;
+        let mut regs = [0; M as usize];
+        for r in regs.iter_mut() {
+            *r = reader.read_u16::<byteorder::LittleEndian>()?;
+        }
+        Ok(Self { regs })
+    }
+
     fn new_reg(lz: u8, sig: u16) -> u16 {
         (u16::from(lz) << R) | sig
     }
