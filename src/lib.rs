@@ -93,6 +93,12 @@ pub struct Sketch {
     regs: Regs,
 }
 
+impl std::fmt::Debug for Sketch {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(fmt, "Sketch {{ {} }}", self.cardinality())
+    }
+}
+
 impl Default for Sketch {
     fn default() -> Self {
         Self {
