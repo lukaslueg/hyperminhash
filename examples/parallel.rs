@@ -1,37 +1,35 @@
-//! A slightly overengineered example of how to count unique lines on stdout
-//! `cargo run --release --example parallel < file.txt`
+//! A slightly overengineered example on how to count unique lines in a file
 
 use crossbeam::channel;
 use hyperminhash::Sketch;
 use std::{
-    io, iter,
-    sync::{Arc, Mutex},
-    thread, time,
+    env, io, process,
+    sync::{atomic, Arc, Mutex},
+    thread,
 };
 
 type Synced<T> = Arc<Mutex<T>>;
 type AsyncResult<T, E> = Result<Synced<T>, E>;
 
 #[derive(Debug)]
-struct AsyncSink<T, I, E> {
+struct AsyncSink<T, E> {
     t: Vec<(Synced<T>, thread::JoinHandle<AsyncResult<T, E>>)>,
-    s: channel::Sender<I>,
 }
 
-impl<T, I, E> AsyncSink<T, I, E>
+impl<T, E> AsyncSink<T, E>
 where
     T: Send + 'static,
-    I: Send + 'static,
     E: Send + 'static,
 {
     /// Construct a threadpool with the given number of threads.
     /// Each thread constructs it's initial state from the `init`-parameter.
     /// Items sent to the sink are folded into the state using `f`.
     /// The final states, one per thread, are returned via `.join()`.
-    fn new<U, V>(num_threads: usize, init: U, f: V) -> Self
+    fn new<U, V, I>(num_threads: usize, init: U, f: V) -> (channel::Sender<I>, Self)
     where
         U: Send + Fn() -> T + 'static,
         V: Send + Clone + Fn(&mut T, I) -> Result<(), E> + 'static,
+        I: Send + 'static,
     {
         assert!(num_threads > 0);
         let (s, recv) = channel::bounded(num_threads + 1);
@@ -52,25 +50,20 @@ where
                 )
             })
             .collect();
-        AsyncSink { t, s }
+        (s, AsyncSink { t })
     }
 
-    pub fn with_default<V>(f: V) -> Self
+    pub fn with_default<V, I>(f: V) -> (channel::Sender<I>, Self)
     where
         V: Send + Clone + Fn(&mut T, I) -> Result<(), E> + 'static,
         T: Default,
+        I: Send + 'static,
     {
         Self::new(8, Default::default, f)
     }
 
-    /// Send an item to a random thread in the pool.
-    pub fn send(&mut self, item: I) -> Result<(), channel::SendError<I>> {
-        self.s.send(item)
-    }
-
     /// Wait for all threads and return their final states.
     pub fn join(self) -> thread::Result<Result<Vec<T>, E>> {
-        drop(self.s);
         self.t
             .into_iter()
             .map(|t| t.1.join())
@@ -99,38 +92,71 @@ where
     }
 }
 
-/// Read chunks from the given reader, split by `b'\n'`
-fn lines(mut inp: impl io::BufRead) -> impl Iterator<Item = io::Result<Vec<u8>>> {
-    iter::from_fn(move || {
-        (|| {
-            let b = inp.fill_buf()?;
-            if b.is_empty() {
-                return Ok(None);
-            }
-            let mut buf = Vec::with_capacity(b.len() + 128);
-            buf.extend_from_slice(b);
-            inp.consume(buf.len());
-            inp.read_until(b'\n', &mut buf)?;
-            Ok(Some(buf))
-        })()
-        .transpose()
-    })
+#[derive(Debug)]
+struct LineBuf<B> {
+    inner: B,
 }
 
-fn main() -> io::Result<()> {
-    let stdin = io::stdin();
+impl<B: LineBuffered> Iterator for LineBuf<B> {
+    type Item = io::Result<Vec<u8>>;
 
-    // Create a Sink which will receive chunks of data, to the utf8-decoding, split
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut buf = Vec::new();
+        match self.inner.read_lines(&mut buf) {
+            Ok(0) => None,
+            Ok(_) => Some(Ok(buf)),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+trait LineBuffered: io::BufRead {
+    fn read_lines(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        let b = self.fill_buf()?;
+        if b.is_empty() {
+            return Ok(0);
+        }
+        let mut len = b.len();
+        buf.reserve(len + 128);
+        buf.extend_from_slice(b);
+        self.consume(len);
+        len += self.read_until(b'\n', buf)?;
+        Ok(len)
+    }
+
+    fn line_buffered(self) -> LineBuf<Self>
+    where
+        Self: Sized,
+    {
+        LineBuf { inner: self }
+    }
+}
+
+impl<T> LineBuffered for T where T: io::BufRead {}
+
+fn main() -> io::Result<()> {
+    let fname = match env::args_os().nth(1) {
+        Some(fname) => fname,
+        None => {
+            eprintln!("Usage: cargo run --release --example parallel [FILENAME]");
+            process::exit(1);
+        }
+    };
+
+    // Create a Sink which will receive chunks of data, do the utf8-decoding, split
     // the lines and feed each line into a Sketch
-    let mut sink = AsyncSink::with_default(|sk: &mut Sketch, items: Vec<u8>| {
+    let (sender, sink) = AsyncSink::with_default(|sk: &mut Sketch, items: Vec<u8>| {
         String::from_utf8(items).map(|s| s.lines().for_each(|l| sk.add(l)))
     });
 
-    let mut now = time::Instant::now();
-    for chunk in lines(stdin.lock()) {
-        sink.send(chunk?).expect("the sink stopped listening");
-        // Every once in a while print a current estimate - it's cheap but not free
-        if now.elapsed() > time::Duration::from_millis(5) {
+    // A seperate thread to print intermediate results, so we don't block i/o
+    let shall_stop = Arc::new(atomic::AtomicBool::new(false));
+    let shall_stop_c = shall_stop.clone();
+    let printer = thread::spawn(move || {
+        use io::Write;
+        let mut stdout = io::stdout();
+        while !shall_stop_c.load(atomic::Ordering::Relaxed) {
+            let now = std::time::Instant::now();
             if let Some(sk) = sink.inspect(None, |sk1, sk2| match sk1 {
                 None => Some(sk2.clone()),
                 Some(mut sk) => {
@@ -138,11 +164,27 @@ fn main() -> io::Result<()> {
                     Some(sk)
                 }
             }) {
-                print!("\rCurrent: {:.0}", sk.cardinality());
+                write!(stdout, "\rCurrent: {:.0}", sk.cardinality()).unwrap();
+                stdout.flush().unwrap();
             }
-            now = time::Instant::now();
+            if let Some(elapsed) = std::time::Duration::from_millis(100).checked_sub(now.elapsed())
+            {
+                thread::sleep(elapsed);
+            }
         }
+        sink
+    });
+
+    // Main thread does i/o and feeds the sink
+    let reader = io::BufReader::with_capacity(512 * 1024, std::fs::File::open(fname)?);
+    for chunk in reader.line_buffered() {
+        sender.send(chunk?).unwrap();
     }
+
+    // Dropping the sender stops the sink; signal the printer to stop so we get the sink back
+    drop(sender);
+    shall_stop.store(true, atomic::Ordering::Relaxed);
+    let sink = printer.join().unwrap();
 
     // Compute the total via union of all Sketches
     let final_sketch = sink
