@@ -134,6 +134,31 @@ trait LineBuffered: io::BufRead {
 
 impl<T> LineBuffered for T where T: io::BufRead {}
 
+
+pub fn byte_lines(inp: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut inp = inp;
+    std::iter::from_fn(move || {
+        if inp.is_empty() {
+            return None;
+        }
+        let ending = memchr::memchr(b'\n', inp).unwrap_or(inp.len() - 1) + 1;
+        let (mut line, rest) = inp.split_at(ending);
+        inp = rest;
+        if let Some(b'\n') = line.last() {
+            line = &line[..line.len() - 1];
+            if let Some(b'\r') = line.last() {
+                line = &line[..line.len() - 1];
+            }
+        }
+        Some(line)
+    })
+}
+
+pub fn lines(inp: &str) -> impl Iterator<Item = &str> {
+    byte_lines(inp.as_bytes()).map(|sl| unsafe { std::str::from_utf8_unchecked(sl) })
+}
+
+
 fn main() -> io::Result<()> {
     let fname = match env::args_os().nth(1) {
         Some(fname) => fname,
@@ -146,7 +171,7 @@ fn main() -> io::Result<()> {
     // Create a Sink which will receive chunks of data, do the utf8-decoding, split
     // the lines and feed each line into a Sketch
     let (sender, sink) = AsyncSink::with_default(|sk: &mut Sketch, items: Vec<u8>| {
-        String::from_utf8(items).map(|s| s.lines().for_each(|l| sk.add(l)))
+        String::from_utf8(items).map(|s| lines(&s).for_each(|l| sk.add(l)))
     });
 
     // A seperate thread to print intermediate results, so we don't block i/o
