@@ -1,10 +1,11 @@
 # Hyperminhash for Rust
 
-[![Build Status](https://travis-ci.org/lukaslueg/hyperminhash.svg?branch=master)](https://travis-ci.org/lukaslueg/hyperminhash)
 [![Crates.io Version](https://img.shields.io/crates/v/hyperminhash.svg)](https://crates.io/crates/hyperminhash)
 [![Docs](https://docs.rs/hyperminhash/badge.svg)](https://docs.rs/hyperminhash)
 
-A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash) for Rust. Very fast, constant memory-footprint cardinality approximation, including intersection and union operation.
+A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash) for Rust.
+Very fast, constant memory-footprint cardinality approximation,
+including intersection and union operation.
 
 ```rust
 use std::{io, io::Bufread, fs};

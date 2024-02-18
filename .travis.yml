@@ -1,9 +1,0 @@
-language: rust
-
-rust:
-  - stable
-  - nightly
-
-script:
-  - cargo test --no-default-features
-  - cargo test --all-features
