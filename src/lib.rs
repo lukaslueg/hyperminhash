@@ -147,8 +147,10 @@ impl Sketch {
         (reg >> (16 - Q)) as u8
     }
 
-    fn add_hash(&mut self, h: (u64, u64)) {
-        let (x, y) = h;
+    fn add_hash(&mut self, h: u128) {
+        let x: u64 = h as u64;
+        let y: u64 = (h >> 64) as u64;
+        //let (x, y) = h;
         let k = x >> MAX;
         let lz = ((x << P) ^ MAXX).leading_zeros() as u8 + 1;
         let sig = (y << (64 - R) >> (64 - R)) as u16;
@@ -158,11 +160,16 @@ impl Sketch {
         }
     }
 
-    /// Add a value to this set
+    /// Add an element to this set, using the element's Hash-implementation
     pub fn add(&mut self, v: impl hash::Hash) {
-        let mut mh = metrohash::MetroHash128::default();
-        v.hash(&mut mh);
-        self.add_hash(mh.finish128());
+        let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+        v.hash(&mut hasher);
+        self.add_hash(hasher.digest128());
+    }
+
+    /// Add a single element given by raw bytes to this set
+    pub fn add_bytes(&mut self, v: &[u8]) {
+        self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
     }
 
     fn sum_and_zeros(&self) -> (f64, f64) {

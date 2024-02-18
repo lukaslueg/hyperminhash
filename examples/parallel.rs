@@ -134,7 +134,6 @@ trait LineBuffered: io::BufRead {
 
 impl<T> LineBuffered for T where T: io::BufRead {}
 
-
 pub fn byte_lines(inp: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut inp = inp;
     std::iter::from_fn(move || {
@@ -158,7 +157,6 @@ pub fn lines(inp: &str) -> impl Iterator<Item = &str> {
     byte_lines(inp.as_bytes()).map(|sl| unsafe { std::str::from_utf8_unchecked(sl) })
 }
 
-
 fn main() -> io::Result<()> {
     let fname = match env::args_os().nth(1) {
         Some(fname) => fname,
@@ -171,7 +169,7 @@ fn main() -> io::Result<()> {
     // Create a Sink which will receive chunks of data, do the utf8-decoding, split
     // the lines and feed each line into a Sketch
     let (sender, sink) = AsyncSink::with_default(|sk: &mut Sketch, items: Vec<u8>| {
-        String::from_utf8(items).map(|s| lines(&s).for_each(|l| sk.add(l)))
+        String::from_utf8(items).map(|s| lines(&s).for_each(|l| sk.add_bytes(l.as_bytes())))
     });
 
     // A seperate thread to print intermediate results, so we don't block i/o
