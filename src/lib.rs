@@ -88,7 +88,7 @@ fn beta(ez: f64) -> f64 {
 }
 
 /// Records the approximate number of unique elements it has seen over it's lifetime.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Sketch {
     regs: Regs,
 }
