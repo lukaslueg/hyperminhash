@@ -3,9 +3,12 @@ use std::{fs, io, io::BufRead, process, thread};
 
 fn read(fname: std::ffi::OsString) -> thread::JoinHandle<io::Result<Sketch>> {
     std::thread::spawn(move || {
-        io::BufReader::new(fs::File::open(fname)?)
-            .lines()
-            .collect::<io::Result<Sketch>>()
+        let mut sk = Sketch::default();
+        let reader = io::BufReader::new(fs::File::open(fname)?).lines();
+        for line in reader {
+            sk.add_bytes(line?.as_ref());
+        }
+        Ok(sk)
     })
 }
 
