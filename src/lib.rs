@@ -300,7 +300,7 @@ mod tests {
         let sketch1: Sketch = va;
         let sketch2: Sketch = vb;
 
-        let union_size = sketch1.clone().union(&sketch2).cardinality();
+        let _union_size = sketch1.clone().union(&sketch2).cardinality();
         
         let actual_similarity = sketch1.similarity(&sketch2);
         let sigma = (actual_similarity - jexact as f64).abs() / jexact as f64;
