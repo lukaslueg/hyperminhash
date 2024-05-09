@@ -302,8 +302,8 @@ mod tests {
         let union_size = sketch1.clone().union(&sketch2).cardinality();
         let expected_similarity = inter as f64 / union_size;
         let actual_similarity = sketch1.similarity(&sketch2);
-        let sigma = (expected_similarity - actual_similarity).abs() / actual_similarity;
-        println!(" jaccard estimate : {:.3e}  exact value : {:.3e} , error : {:.3e}", expected_similarity, actual_similarity, sigma);
+        let sigma = (expected_similarity - actual_similarity).abs() / expected_similarity;
+        println!(" jaccard estimate : {:.3e}  exact value : {:.3e} , error : {:.3e}", actual_similarity, expected_similarity,  sigma);
         assert!(
             (actual_similarity - expected_similarity).abs() < 0.05,
             "Expected similarity around {}, got {}",
