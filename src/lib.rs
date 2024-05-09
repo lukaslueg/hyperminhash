@@ -295,19 +295,20 @@ mod tests {
 
         let vb = (vbmin..vbmax).collect();
         let inter = vamax - vbmin;
+        let jexact = inter as f32 / vbmax as f32;
 
         let sketch1: Sketch = va;
         let sketch2: Sketch = vb;
 
         let union_size = sketch1.clone().union(&sketch2).cardinality();
-        let expected_similarity = inter as f64 / union_size;
+        
         let actual_similarity = sketch1.similarity(&sketch2);
-        let sigma = (expected_similarity - actual_similarity).abs() / expected_similarity;
-        println!(" jaccard estimate : {:.3e}  exact value : {:.3e} , error : {:.3e}", actual_similarity, expected_similarity,  sigma);
+        let sigma = (actual_similarity - jexact as f64).abs() / jexact as f64;
+        println!(" jaccard estimate : {:.5e}  exact value : {:.5e} , error : {:.5e}", actual_similarity, jexact,  sigma);
         assert!(
-            (actual_similarity - expected_similarity).abs() < 0.05,
+            (actual_similarity - jexact as f64).abs() < 0.01,
             "Expected similarity around {}, got {}",
-            expected_similarity,
+            jexact,
             actual_similarity
         );
     }
