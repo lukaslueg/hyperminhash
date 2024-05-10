@@ -297,7 +297,6 @@ mod tests {
         let jexact = inter as f64 / vbmax as f64;
         let sketch1: Sketch = va;
         let sketch2: Sketch = vb;
-        let _union_size = sketch1.clone().union(&sketch2).cardinality();
         let actual_similarity = sketch1.similarity(&sketch2);
         let sigma = (actual_similarity - jexact).abs() / jexact;
         println!(
