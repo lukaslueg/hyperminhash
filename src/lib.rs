@@ -306,4 +306,3 @@ mod tests {
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
     }
 }
-
