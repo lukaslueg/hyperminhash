@@ -286,4 +286,23 @@ mod tests {
         let exp_is = 45_000.0;
         assert!((sk1.intersection(&sk2) - exp_is).abs() / exp_is < 0.01);
     }
+    #[test]
+    fn test_similarity_partially_overlapping() {
+        let vamax = 300000;
+        let va = (0..vamax).collect();
+        let vbmin = 290000;
+        let vbmax = 2 * vamax;
+        let vb = (vbmin..vbmax).collect();
+        let inter = vamax - vbmin;
+        let jexact = inter as f64 / vbmax as f64;
+        let sketch1: Sketch = va;
+        let sketch2: Sketch = vb;
+        let actual_similarity = sketch1.similarity(&sketch2);
+        let sigma = (actual_similarity - jexact).abs() / jexact;
+        println!(
+            " jaccard estimate : {:.5e}  exact value : {:.5e} , error : {:.5e}",
+            actual_similarity, jexact, sigma
+        );
+        assert!((actual_similarity - jexact).abs() / jexact < 0.1);
+    }
 }
