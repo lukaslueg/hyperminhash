@@ -4,7 +4,7 @@ use crossbeam::channel;
 use hyperminhash::Sketch;
 use std::{
     env, io, process,
-    sync::{atomic, Arc, Mutex},
+    sync::{Arc, Mutex, atomic},
     thread,
 };
 
