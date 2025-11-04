@@ -172,6 +172,19 @@ impl Sketch {
         self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
     }
 
+    pub fn add_with_seed(&mut self, v: impl hash::Hash, seed: u64) {
+        // Streaming hasher seeded:
+        let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
+        v.hash(&mut hasher);
+        self.add_hash(hasher.digest128());
+    }
+
+    /// Add raw bytes using the one-shot seeded XXH3-128 function.
+    /// All sketches you compare/merge must use the *same* seed.
+    pub fn add_bytes_with_seed(&mut self, v: &[u8], seed: u64) {
+        self.add_hash(xxhash_rust::xxh3::xxh3_128_with_seed(v, seed));
+    }
+
     fn sum_and_zeros(&self) -> (f64, f64) {
         let mut sum = 0.0;
         let mut ez = 0.0;
@@ -305,4 +318,5 @@ mod tests {
         );
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
     }
+    
 }
