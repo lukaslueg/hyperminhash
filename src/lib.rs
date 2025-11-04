@@ -4,9 +4,9 @@
 //! As with other cardinality estimators, `Hyperminhash` has two advantages when counting very large
 //! sets or streams of elements:
 //! * It uses a single data structure that never grows while counting elements. The structure
-//! currently consumes 32kb of memory, allocated on the stack.
+//!   currently consumes 32kb of memory, allocated on the stack.
 //! * Because there are no indirections due to allocations, the amount of work done for counting
-//! a marginal element stays constant.
+//!   a marginal element stays constant.
 //!
 //! Given that, a `Vec` or `HashSet` is usually faster when counting small sets. When counting
 //! streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
@@ -58,6 +58,16 @@
 //!     let sketch2 = Sketch::load(&buffer[..]).expect("Failed to read");
 //!     assert_eq!(sketch1.cardinality(), sketch2.cardinality());
 //! }
+//!
+//!
+//! // --- Optional: seeded hashing (per-run randomness, consistent within a run) ---
+//! // Pick one seed for the run and reuse it across all inserts/sketches that you
+//! // plan to compare. Different seeds will produce different registers.
+//! let seed: u64 = 0xD1CE_5EED_1234_5678;
+//! let mut sk_seeded = Sketch::default();
+//! sk_seeded.add_with_seed("foo", seed);
+//! // You can also hash raw bytes deterministically with a seed:
+//! sk_seeded.add_bytes_with_seed(b"bar", seed);
 //! ```
 
 use std::hash;
@@ -65,7 +75,7 @@ use std::hash;
 const P: u32 = 14;
 const M: u32 = 1 << P;
 const MAX: u32 = 64 - P;
-const MAXX: u64 = u64::max_value() >> MAX;
+const MAXX: u64 = u64::MAX >> MAX;
 const ALPHA: f64 = 0.7213 / (1f64 + 1.079 / (M as f64));
 const Q: u8 = 6;
 const R: u8 = 10;
@@ -172,6 +182,19 @@ impl Sketch {
         self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
     }
 
+    pub fn add_with_seed(&mut self, v: impl hash::Hash, seed: u64) {
+        // Streaming hasher seeded:
+        let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
+        v.hash(&mut hasher);
+        self.add_hash(hasher.digest128());
+    }
+
+    /// Add raw bytes using the one-shot seeded XXH3-128 function.
+    /// All sketches you compare/merge must use the *same* seed.
+    pub fn add_bytes_with_seed(&mut self, v: &[u8], seed: u64) {
+        self.add_hash(xxhash_rust::xxh3::xxh3_128_with_seed(v, seed));
+    }
+
     fn sum_and_zeros(&self) -> (f64, f64) {
         let mut sum = 0.0;
         let mut ez = 0.0;
@@ -204,7 +227,7 @@ impl Sketch {
     fn approximate_expected_collisions(n: f64, m: f64) -> f64 {
         let (n, m) = (n.max(m), n.min(m));
         if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
-            std::f64::INFINITY
+            f64::INFINITY
         } else if n > 2f64.powf(f64::from(P) + 5.0) {
             let d = (4.0 * n / m) / ((1.0 + n) / m).powi(2);
             C * 2f64.powf(f64::from(P) - f64::from(R)) * d + 0.5
@@ -304,5 +327,25 @@ mod tests {
             actual_similarity, jexact, sigma
         );
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
+    }
+    #[test]
+    fn seeded_hash() {
+        // Same value, different seeds, registers differ, sketches not equal.
+        let mut s0 = Sketch::default();
+        s0.add_with_seed("foo", 0);
+        let mut s1 = Sketch::default();
+        s1.add_with_seed("foo", 1);
+
+        assert_ne!(s0, s1, "different seeds should yield different registers");
+
+        // Cardinality should be nearly identical for one element;
+        // tiny numerical differences are possible due to lz contribution.
+        let c0 = s0.cardinality();
+        let c1 = s1.cardinality();
+        let rel = (c0 - c1).abs() / c0.max(c1).max(1.0);
+        assert!(
+            rel < 1e-3,
+            "cardinality should be nearly identical with different seeds: c0={c0}, c1={c1}, rel={rel}"
+        );
     }
 }
