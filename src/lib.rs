@@ -4,9 +4,9 @@
 //! As with other cardinality estimators, `Hyperminhash` has two advantages when counting very large
 //! sets or streams of elements:
 //! * It uses a single data structure that never grows while counting elements. The structure
-//! currently consumes 32kb of memory, allocated on the stack.
+//!     currently consumes 32kb of memory, allocated on the stack.
 //! * Because there are no indirections due to allocations, the amount of work done for counting
-//! a marginal element stays constant.
+//!     a marginal element stays constant.
 //!
 //! Given that, a `Vec` or `HashSet` is usually faster when counting small sets. When counting
 //! streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
@@ -65,7 +65,7 @@ use std::hash;
 const P: u32 = 14;
 const M: u32 = 1 << P;
 const MAX: u32 = 64 - P;
-const MAXX: u64 = u64::max_value() >> MAX;
+const MAXX: u64 = u64::MAX >> MAX;
 const ALPHA: f64 = 0.7213 / (1f64 + 1.079 / (M as f64));
 const Q: u8 = 6;
 const R: u8 = 10;
@@ -217,7 +217,7 @@ impl Sketch {
     fn approximate_expected_collisions(n: f64, m: f64) -> f64 {
         let (n, m) = (n.max(m), n.min(m));
         if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
-            std::f64::INFINITY
+            f64::INFINITY
         } else if n > 2f64.powf(f64::from(P) + 5.0) {
             let d = (4.0 * n / m) / ((1.0 + n) / m).powi(2);
             C * 2f64.powf(f64::from(P) - f64::from(R)) * d + 0.5
