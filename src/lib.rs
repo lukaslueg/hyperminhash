@@ -58,6 +58,16 @@
 //!     let sketch2 = Sketch::load(&buffer[..]).expect("Failed to read");
 //!     assert_eq!(sketch1.cardinality(), sketch2.cardinality());
 //! }
+//!
+//!
+//! // --- Optional: seeded hashing (per-run randomness, consistent within a run) ---
+//! // Pick one seed for the run and reuse it across all inserts/sketches that you
+//! // plan to compare. Different seeds will produce different registers.
+//! let seed: u64 = 0xD1CE_5EED_1234_5678;
+//! let mut sk_seeded = Sketch::default();
+//! sk_seeded.add_with_seed("foo", seed);
+//! // You can also hash raw bytes deterministically with a seed:
+//! sk_seeded.add_bytes_with_seed(b"bar", seed);
 //! ```
 
 use std::hash;
@@ -317,5 +327,25 @@ mod tests {
             actual_similarity, jexact, sigma
         );
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
+    }
+    #[test]
+    fn seeded_hash() {
+        // Same value, different seeds, registers differ, sketches not equal.
+        let mut s0 = Sketch::default();
+        s0.add_with_seed("foo", 0);
+        let mut s1 = Sketch::default();
+        s1.add_with_seed("foo", 1);
+
+        assert_ne!(s0, s1, "different seeds should yield different registers");
+
+        // Cardinality should be nearly identical for one element;
+        // tiny numerical differences are possible due to lz contribution.
+        let c0 = s0.cardinality();
+        let c1 = s1.cardinality();
+        let rel = (c0 - c1).abs() / c0.max(c1).max(1.0);
+        assert!(
+            rel < 1e-3,
+            "cardinality should be nearly identical with different seeds: c0={c0}, c1={c1}, rel={rel}"
+        );
     }
 }
