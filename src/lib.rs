@@ -4,9 +4,9 @@
 //! As with other cardinality estimators, `Hyperminhash` has two advantages when counting very large
 //! sets or streams of elements:
 //! * It uses a single data structure that never grows while counting elements. The structure
-//!     currently consumes 32kb of memory, allocated on the stack.
+//!   currently consumes 32kb of memory, allocated on the stack.
 //! * Because there are no indirections due to allocations, the amount of work done for counting
-//!     a marginal element stays constant.
+//!   a marginal element stays constant.
 //!
 //! Given that, a `Vec` or `HashSet` is usually faster when counting small sets. When counting
 //! streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
@@ -318,4 +318,5 @@ mod tests {
         );
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
     }
+    
 }
