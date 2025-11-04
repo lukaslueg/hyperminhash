@@ -60,14 +60,14 @@
 //! }
 //!
 //!
-//! // --- Optional: seeded hashing (per-run randomness, consistent within a run) ---
-//! // Pick one seed for the run and reuse it across all inserts/sketches that you
-//! // plan to compare. Different seeds will produce different registers.
-//! let seed: u64 = 0xD1CE_5EED_1234_5678;
+//! // Use custom seed-values to distinguish elements that ordinarily
+//! // hash equally.
+//! const WHITE_SEED: u64 = 0xD1CE_5EED_1234_5678;
+//! const BLUE_SEED: u64 = 0xDEAD_BEEF_1234_5678;
 //! let mut sk_seeded = Sketch::default();
-//! sk_seeded.add_with_seed("foo", seed);
-//! // You can also hash raw bytes deterministically with a seed:
-//! sk_seeded.add_bytes_with_seed(b"bar", seed);
+//! sk_seeded.add_with_seed("foo", WHITE_SEED);
+//! sk_seeded.add_with_seed("foo", BLUE_SEED);
+//! assert!(sk_seeded.cardinality() >= 1.0);
 //! ```
 
 use std::hash;
@@ -170,18 +170,20 @@ impl Sketch {
         }
     }
 
-    /// Add an element to this set, using the element's Hash-implementation
+    /// Add an element to this Sketch using the element's Hash-implementation
     pub fn add(&mut self, v: impl hash::Hash) {
         let mut hasher = xxhash_rust::xxh3::Xxh3::new();
         v.hash(&mut hasher);
         self.add_hash(hasher.digest128());
     }
 
-    /// Add a single element given by raw bytes to this set
+    /// Add a single element given by raw bytes to this Sketch
     pub fn add_bytes(&mut self, v: &[u8]) {
         self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
     }
 
+    /// Add an element to this Sketch using the element's Hash-implementation and a seed-value
+    /// Elements that hash equally but use different seed values are seen as unique elements.
     pub fn add_with_seed(&mut self, v: impl hash::Hash, seed: u64) {
         // Streaming hasher seeded:
         let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
@@ -189,8 +191,8 @@ impl Sketch {
         self.add_hash(hasher.digest128());
     }
 
-    /// Add raw bytes using the one-shot seeded XXH3-128 function.
-    /// All sketches you compare/merge must use the *same* seed.
+    /// Add a single element given by raw bytes and a see value to this Sketch
+    /// Elements that hash equally but use different seed values are seen as unique elements.
     pub fn add_bytes_with_seed(&mut self, v: &[u8], seed: u64) {
         self.add_hash(xxhash_rust::xxh3::xxh3_128_with_seed(v, seed));
     }
@@ -309,6 +311,7 @@ mod tests {
         let exp_is = 45_000.0;
         assert!((sk1.intersection(&sk2) - exp_is).abs() / exp_is < 0.01);
     }
+
     #[test]
     fn test_similarity_partially_overlapping() {
         let vamax = 300000;
@@ -328,9 +331,17 @@ mod tests {
         );
         assert!((actual_similarity - jexact).abs() / jexact < 0.1);
     }
+
     #[test]
     fn seeded_hash() {
         // Same value, different seeds, registers differ, sketches not equal.
+
+        let mut s = Sketch::default();
+        s.add_with_seed("foo", 0);
+        assert!(s.cardinality() >= 0.0);
+        s.add_with_seed("foo", 1);
+        assert!(s.cardinality() >= 1.0);
+
         let mut s0 = Sketch::default();
         s0.add_with_seed("foo", 0);
         let mut s1 = Sketch::default();
