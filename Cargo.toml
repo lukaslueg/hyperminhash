@@ -21,3 +21,4 @@ memchr = "2"
 [features]
 default = []
 serialize = ["byteorder"]
+stdsimd = []
