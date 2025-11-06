@@ -76,9 +76,7 @@ use std::hash;
 #[cfg(feature = "stdsimd")]
 use std::simd::cmp::SimdPartialEq;
 #[cfg(feature = "stdsimd")]
-use std::simd::num::SimdFloat;
-#[cfg(feature = "stdsimd")]
-use std::simd::{StdFloat, f64x8, u16x32};
+use std::simd::u16x32;
 
 const P: u32 = 14;
 const M: u32 = 1 << P;
@@ -246,7 +244,6 @@ impl Sketch {
         }
     }
 
-    #[cfg(not(feature = "stdsimd"))]
     fn expected_collisions(n: f64, m: f64) -> f64 {
         let mut x = 0.0;
         let mut b1: f64;
@@ -269,75 +266,6 @@ impl Sketch {
             }
         }
         (x * f64::from(P)) + 0.5
-    }
-
-    #[cfg(feature = "stdsimd")]
-    fn expected_collisions(n: f64, m: f64) -> f64 {
-        const LANES: usize = 8;
-        let tr_f = f64::from(TR);
-
-        let mut acc = 0.0;
-
-        // i runs as before; note: your scalar code never hits the `i == TQ` arm
-        // because the loop is `1..TQ`. We preserve that exact behavior here.
-        for i in 1..TQ {
-            // exact power-of-two denominator as f64 (avoids powf)
-            let den = f64::from_bits(((P + u32::from(R) + i) as u64 + 1023) << 52);
-            let den_alt = f64::from_bits(((P + u32::from(R) + i - 1) as u64 + 1023) << 52);
-
-            let one_v = f64x8::splat(1.0);
-            let n_v = f64x8::splat(n);
-            let m_v = f64x8::splat(m);
-            let tr_v = f64x8::splat(tr_f);
-            let den_v = f64x8::splat(den);
-            let den_alt_v = f64x8::splat(den_alt);
-
-            let mut j = 1usize;
-
-            // vectorized blocks of j
-            while j + LANES <= TR as usize {
-                let j_vec = f64x8::from_array(core::array::from_fn(|k| (j + k) as f64));
-
-                // b1, b2 as in scalar (the i==TQ arm never triggers; we still keep parity)
-                let (b1, b2) = if i != TQ {
-                    let b1 = (tr_v + j_vec) / den_v;
-                    let b2 = (tr_v + j_vec + f64x8::splat(1.0)) / den_v;
-                    (b1, b2)
-                } else {
-                    let b1 = j_vec / den_alt_v;
-                    let b2 = (j_vec + f64x8::splat(1.0)) / den_alt_v;
-                    (b1, b2)
-                };
-
-                // (1 - b)^n = exp(n * ln(1 - b))
-                let pnx2 = (n_v * (one_v - b2).ln()).exp();
-                let pnx1 = (n_v * (one_v - b1).ln()).exp();
-                let pmx2 = (m_v * (one_v - b2).ln()).exp();
-                let pmx1 = (m_v * (one_v - b1).ln()).exp();
-
-                let prx = pnx2 - pnx1;
-                let pry = pmx2 - pmx1;
-
-                acc += (prx * pry).reduce_sum();
-                j += LANES;
-            }
-
-            // scalar tail for leftover j
-            while j < TR as usize {
-                let j_f = j as f64;
-                let (b1, b2) = if i != TQ {
-                    ((tr_f + j_f) / den, (tr_f + j_f + 1.0) / den)
-                } else {
-                    (j_f / den_alt, (j_f + 1.0) / den_alt)
-                };
-                let prx = (1.0 - b2).powf(n) - (1.0 - b1).powf(n);
-                let pry = (1.0 - b2).powf(m) - (1.0 - b1).powf(m);
-                acc += prx * pry;
-                j += 1;
-            }
-        }
-
-        (acc * f64::from(P)) + 0.5
     }
 
     /// The Jaccard Index similarity estimation
