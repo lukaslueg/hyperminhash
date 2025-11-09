@@ -71,6 +71,7 @@
 //! ```
 
 use std::hash;
+use std::sync::OnceLock;
 
 const P: u32 = 14;
 const M: u32 = 1 << P;
@@ -95,6 +96,51 @@ fn beta(ez: f64) -> f64 {
         + 0.037_380_27 * zl.powi(5)
         + -0.005_384_159 * zl.powi(6)
         + 0.000_424_19 * zl.powi(7)
+}
+
+const TQ_USIZE: usize = TQ as usize;
+const TR_USIZE: usize = TR as usize;
+
+// Precomputed ln(1 - b) for the two bin edges per (i, j).
+struct EcTable {
+    ln1p_neg_b1: Vec<Vec<f64>>, // [TQ][TR]
+    ln1p_neg_b2: Vec<Vec<f64>>, // [TQ][TR]
+}
+
+static EC_TABLE: OnceLock<EcTable> = OnceLock::new();
+
+fn build_ec_table() -> EcTable {
+    let mut ln1p_neg_b1 = vec![vec![0.0; TR_USIZE]; TQ_USIZE];
+    let mut ln1p_neg_b2 = vec![vec![0.0; TR_USIZE]; TQ_USIZE];
+
+    // i in 1..TQ (exclusive upper bound), j in 1..TR (skip j=0)
+    for i in 1..TQ {
+        let row = (i as usize) - 1;
+        if i != TQ {
+            let den = 2f64.powf((P as f64) + (R as f64) + (i as f64));
+            for j1 in 1..TR {
+                let j = j1 as f64;
+                let b1 = (TR as f64 + j) / den;
+                let b2 = (TR as f64 + j + 1.0) / den;
+                ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
+                ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+            }
+        } else {
+            let den = 2f64.powf((P as f64) + (R as f64) + (i as f64) - 1.0);
+            for j1 in 1..TR {
+                let j = j1 as f64;
+                let b1 = j / den;
+                let b2 = (j + 1.0) / den;
+                ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
+                ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+            }
+        }
+    }
+
+    EcTable {
+        ln1p_neg_b1,
+        ln1p_neg_b2,
+    }
 }
 
 /// Records the approximate number of unique elements it has seen over it's lifetime.
@@ -239,29 +285,28 @@ impl Sketch {
     }
 
     fn expected_collisions(n: f64, m: f64) -> f64 {
+        // Precompute on first use; thread-safe.
+        let tbl = EC_TABLE.get_or_init(build_ec_table);
+
         let mut x = 0.0;
-        let mut b1: f64;
-        let mut b2: f64;
+        // SAME bounds as your current implementation:
         for i in 1..TQ {
-            for j in 1..TR {
-                let j = f64::from(j);
-                if i != TQ {
-                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
-                    b1 = (f64::from(TR) + j) / den;
-                    b2 = (f64::from(TR) + j + 1.0) / den;
-                } else {
-                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
-                    b1 = j / den;
-                    b2 = (j + 1.0) / den;
-                }
-                let prx = (1.0 - b2).powf(n) - (1.0 - b1).powf(n);
-                let pry = (1.0 - b2).powf(m) - (1.0 - b1).powf(m);
-                x += prx * pry;
+            let row = (i as usize) - 1;
+            let l1 = &tbl.ln1p_neg_b1[row];
+            let l2 = &tbl.ln1p_neg_b2[row];
+
+            for j1 in 1..TR {
+                // (1 - b)^n = exp(n * ln1p(-b))
+                let a1 = (n * l2[j1 as usize]).exp();
+                let a0 = (n * l1[j1 as usize]).exp();
+                let b1 = (m * l2[j1 as usize]).exp();
+                let b0 = (m * l1[j1 as usize]).exp();
+                x += (a1 - a0) * (b1 - b0);
             }
         }
+
         (x * f64::from(P)) + 0.5
     }
-
     /// The Jaccard Index similarity estimation
     pub fn similarity(&self, other: &Self) -> f64 {
         let cc = self
@@ -358,5 +403,53 @@ mod tests {
             rel < 1e-3,
             "cardinality should be nearly identical with different seeds: c0={c0}, c1={c1}, rel={rel}"
         );
+    }
+    #[test]
+    fn ec_table_matches_powf_reference() {
+        // Reference implementation using powf with bounds/scaling
+        fn ec_powf_ref(n: f64, m: f64) -> f64 {
+            let mut x = 0.0;
+            let mut b1: f64;
+            let mut b2: f64;
+            for i in 1..TQ {
+                for j in 1..TR {
+                    let j = j as f64;
+                    if i != TQ {
+                        let den = 2f64.powf((P as f64) + (R as f64) + (i as f64));
+                        b1 = (TR as f64 + j) / den;
+                        b2 = (TR as f64 + j + 1.0) / den;
+                    } else {
+                        let den = 2f64.powf((P as f64) + (R as f64) + (i as f64) - 1.0);
+                        b1 = j / den;
+                        b2 = (j + 1.0) / den;
+                    }
+                    let prx = (1.0 - b2).powf(n) - (1.0 - b1).powf(n);
+                    let pry = (1.0 - b2).powf(m) - (1.0 - b1).powf(m);
+                    x += prx * pry;
+                }
+            }
+            (x * f64::from(P)) + 0.5
+        }
+
+        // A few regimes
+        let cases = [
+            (10.0, 11.0),
+            (1_000.0, 800.0),
+            (300_000.0, 360_000.0),
+            (600_000.0, 500_000.0),
+        ];
+
+        for &(n, m) in &cases {
+            let ref_ec = ec_powf_ref(n, m);
+            let tbl_ec = super::Sketch::expected_collisions(n, m);
+            let denom = ref_ec.abs().max(tbl_ec.abs()).max(1.0);
+            let rel = (ref_ec - tbl_ec).abs() / denom;
+
+            // Tighter than 1e-12 is usually fine; keep a bit of margin.
+            assert!(
+                rel < 1e-12,
+                "n={n}, m={m}, rel={rel}, ref={ref_ec}, tbl={tbl_ec}"
+            );
+        }
     }
 }
