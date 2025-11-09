@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "stdsimd", feature(portable_simd))]
 //! Very fast, constant memory-footprint cardinality approximation, including intersection and union operation.
 //! A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash).
 //!
@@ -72,11 +71,6 @@
 //! ```
 
 use std::hash;
-
-#[cfg(feature = "stdsimd")]
-use std::simd::cmp::SimdPartialEq;
-#[cfg(feature = "stdsimd")]
-use std::simd::u16x32;
 
 const P: u32 = 14;
 const M: u32 = 1 << P;
@@ -269,7 +263,6 @@ impl Sketch {
     }
 
     /// The Jaccard Index similarity estimation
-    #[cfg(not(feature = "stdsimd"))]
     pub fn similarity(&self, other: &Self) -> f64 {
         let cc = self
             .regs
@@ -294,64 +287,6 @@ impl Sketch {
             return 0.0;
         }
         (cc as f64 - ec) / cn as f64
-    }
-
-    #[cfg(feature = "stdsimd")]
-    pub fn similarity(&self, other: &Self) -> f64 {
-        let a = &self.regs;
-        let b = &other.regs;
-
-        const LANES: usize = 32;
-        let n = a.len();
-        let chunks = n / LANES;
-
-        let mut cc: u64 = 0;
-        let mut cn: u64 = 0;
-
-        let zero = u16x32::splat(0);
-
-        // Vectorized blocks
-        for i in 0..chunks {
-            let base = i * LANES;
-
-            // SAFETY: slices are exactly LANES long
-            let va = u16x32::from_slice(&a[base..base + LANES]);
-            let vb = u16x32::from_slice(&b[base..base + LANES]);
-
-            let a_nz = va.simd_ne(zero);
-            let b_nz = vb.simd_ne(zero);
-            let any_nz = a_nz | b_nz;
-
-            let eq = va.simd_eq(vb);
-            let both_nz = a_nz & b_nz;
-            let cc_mask = eq & both_nz;
-
-            cn += (any_nz.to_bitmask().count_ones()) as u64;
-            cc += (cc_mask.to_bitmask().count_ones()) as u64;
-        }
-
-        // Scalar tail
-        for i in (chunks * LANES)..n {
-            let ai = a[i];
-            let bi = b[i];
-            if ai != 0 || bi != 0 {
-                cn += 1;
-                if ai != 0 && ai == bi {
-                    cc += 1;
-                }
-            }
-        }
-
-        if cc == 0 {
-            return 0.0;
-        }
-        let n_est = self.cardinality();
-        let m_est = other.cardinality();
-        let ec = Self::approximate_expected_collisions(n_est, m_est);
-        if (cc as f64) < ec {
-            return 0.0;
-        }
-        (cc as f64 - ec) / (cn as f64)
     }
 
     /// The approximate number of elements in both sets
