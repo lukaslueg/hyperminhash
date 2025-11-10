@@ -103,9 +103,9 @@ static INV_POW2: OnceLock<[f64; 64]> = OnceLock::new();
 fn inv_pow2_table() -> &'static [f64; 64] {
     INV_POW2.get_or_init(|| {
         let mut t = [0.0; 64];
-        let mut v = 1.0f64;         // 2^0
+        let mut v = 1.0f64; // 2^0
         for k in 0..64 {
-            t[k] = 1.0 / v;         // 2^{-k}
+            t[k] = 1.0 / v; // 2^{-k}
             v *= 2.0;
         }
         t
@@ -263,7 +263,9 @@ impl Sketch {
         let mut ez = 0.0;
         for &reg in &self.regs {
             let lz = Self::lz(reg) as usize;
-            if lz == 0 { ez += 1.0; }
+            if lz == 0 {
+                ez += 1.0;
+            }
             sum += inv[lz];
         }
         (sum, ez)
