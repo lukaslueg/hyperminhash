@@ -103,10 +103,10 @@ static INV_POW2: OnceLock<[f64; 64]> = OnceLock::new();
 fn inv_pow2_table() -> &'static [f64; 64] {
     INV_POW2.get_or_init(|| {
         let mut t = [0.0; 64];
-        let mut v = 1.0f64; // 2^0
-        for k in 0..64 {
-            t[k] = 1.0 / v; // 2^{-k}
-            v *= 2.0;
+        let mut val = 1.0f64; // 2^0
+        for slot in t.iter_mut() {
+            *slot = val; // 2^{-k}
+            val *= 0.5; // next
         }
         t
     })
