@@ -98,6 +98,20 @@ fn beta(ez: f64) -> f64 {
         + 0.000_424_19 * zl.powi(7)
 }
 
+static INV_POW2: OnceLock<[f64; 64]> = OnceLock::new();
+
+fn inv_pow2_table() -> &'static [f64; 64] {
+    INV_POW2.get_or_init(|| {
+        let mut t = [0.0; 64];
+        let mut v = 1.0f64;         // 2^0
+        for k in 0..64 {
+            t[k] = 1.0 / v;         // 2^{-k}
+            v *= 2.0;
+        }
+        t
+    })
+}
+
 const TQ_USIZE: usize = TQ as usize;
 const TR_USIZE: usize = TR as usize;
 
@@ -244,14 +258,13 @@ impl Sketch {
     }
 
     fn sum_and_zeros(&self) -> (f64, f64) {
+        let inv = inv_pow2_table();
         let mut sum = 0.0;
         let mut ez = 0.0;
-        for reg in self.regs.iter() {
-            let lz = Self::lz(*reg);
-            if lz == 0 {
-                ez += 1.0;
-            }
-            sum += 1.0 / (2f64).powi(i32::from(lz));
+        for &reg in &self.regs {
+            let lz = Self::lz(reg) as usize;
+            if lz == 0 { ez += 1.0; }
+            sum += inv[lz];
         }
         (sum, ez)
     }
@@ -277,8 +290,11 @@ impl Sketch {
         if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
             f64::INFINITY
         } else if n > 2f64.powf(f64::from(P) + 5.0) {
-            let d = (4.0 * n / m) / ((1.0 + n) / m).powi(2);
-            C * 2f64.powf(f64::from(P) - f64::from(R)) * d + 0.5
+            let s = n + m;
+            let ratio_factor = 4.0 * (n / s) * (m / s); // 4 n m / (n + m)^2
+            const SHIFT: u32 = P - (R as u32);
+            const K: f64 = C * ((1u64 << SHIFT) as f64); // precompute C * 2^(P-R)
+            K * ratio_factor
         } else {
             Self::expected_collisions(n, m) / f64::from(P)
         }
