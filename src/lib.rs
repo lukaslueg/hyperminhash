@@ -85,9 +85,9 @@ const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
 
-fn beta(ez: f64) -> f64 {
-    let zl = (ez + 1.0).ln();
-    -0.370_393_911 * ez
+fn beta(ez: u16) -> f64 {
+    let zl = (f64::from(ez) + 1.0).ln();
+    -0.370_393_911 * f64::from(ez)
         + 0.070_471_823 * zl
         + 0.173_936_86 * zl.powi(2)
         + 0.163_398_39 * zl.powi(3)
@@ -202,15 +202,23 @@ impl Sketch {
         self.add_hash(xxhash_rust::xxh3::xxh3_128_with_seed(v, seed));
     }
 
-    fn sum_and_zeros(&self) -> (f64, f64) {
-        let mut sum = 0.0;
-        let mut ez = 0.0;
-        for reg in self.regs.iter() {
-            let lz = Self::lz(*reg);
-            if lz == 0 {
-                ez += 1.0;
+    fn sum_and_zeros(&self) -> (f64, u16) {
+        static L: std::sync::LazyLock<[f64; 256]> = std::sync::LazyLock::new(|| {
+            let mut l: [f64; 256] = [0.0; 256];
+            for (i, v) in l.iter_mut().enumerate() {
+                *v = 1.0 / (2f64).powi(i32::try_from(i).unwrap());
             }
-            sum += 1.0 / (2f64).powi(i32::from(lz));
+            l
+        });
+        let l = &*L;
+        let mut sum = 0.0;
+        let mut ez: u16 = 0;
+        for reg in self.regs {
+            let lz = Self::lz(reg);
+            if lz == 0 {
+                ez += 1;
+            }
+            sum += l[lz as usize];
         }
         (sum, ez)
     }
@@ -218,7 +226,7 @@ impl Sketch {
     /// The approximate number of unique elements in the set.
     pub fn cardinality(&self) -> f64 {
         let (sum, ez) = self.sum_and_zeros();
-        ALPHA * (f64::from(M)) * ((f64::from(M)) - ez) / (beta(ez) + sum)
+        ALPHA * (f64::from(M)) * ((f64::from(M)) - f64::from(ez)) / (beta(ez) + sum)
     }
 
     /// Merge two sets, resulting in this set becoming the union-set.
@@ -304,6 +312,14 @@ impl Sketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty() {
+        let mut sk = Sketch::new();
+        assert_eq!(sk.cardinality(), 0.0);
+        sk.add(0);
+        assert_ne!(sk.cardinality(), 0.0);
+    }
 
     #[test]
     fn approx_count() {
