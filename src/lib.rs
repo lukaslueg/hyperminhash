@@ -149,6 +149,11 @@ impl Sketch {
         Ok(Self { regs })
     }
 
+    /// Construct an empty `Sketch`
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     fn new_reg(lz: u8, sig: u16) -> u16 {
         (u16::from(lz) << R) | sig
     }
