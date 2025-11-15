@@ -4,12 +4,13 @@
 //! As with other cardinality estimators, `Hyperminhash` has two advantages when counting very large
 //! sets or streams of elements:
 //! * It uses a single data structure that never grows while counting elements. The structure
-//!   currently consumes 32kb of memory, allocated on the stack.
-//! * Because there are no indirections due to allocations, the amount of work done for counting
-//!   a marginal element stays constant.
+//!   consumes 32kb of memory, allocated on the stack.
+//! * The amount of work done for counting a marginal element stays approximately constant.
 //!
-//! Given that, a `Vec` or `HashSet` is usually faster when counting small sets. When counting
-//! streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
+//! For sets smaller than roughly 10^4 to 10^5 unique elements, a `std::collections::HashSet`
+//! is usually faster, albeit using much more memory. When counting streams of millions of
+//! elements, `Hyperminhash` is much faster and uses much
+//! less memory.
 //!
 //! ```rust
 //! use hyperminhash::Sketch;
@@ -42,6 +43,10 @@
 //! let i = sketch1.intersection(&sketch2);
 //! assert!(i > 4_800.0 && i < 5_200.0);
 //!
+//! // Comparing both sets, the number of elements that are in both sets is roughly 33%
+//! let j = sketch1.similarity(&sketch2);
+//! assert!(j > 0.33 && j < 0.34);
+//!
 //! // Merge sketch1 with sketch2
 //! let mut sketch1 = sketch1;
 //! sketch1.union(&sketch2);
@@ -67,7 +72,7 @@
 //! let mut sk_seeded = Sketch::default();
 //! sk_seeded.add_with_seed("foo", WHITE_SEED);
 //! sk_seeded.add_with_seed("foo", BLUE_SEED);
-//! assert!(sk_seeded.cardinality() >= 1.0);
+//! assert!(sk_seeded.cardinality() > 1.0);
 //! ```
 
 use std::hash;
