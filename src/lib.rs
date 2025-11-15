@@ -177,7 +177,7 @@ impl Sketch {
 
     /// Add an element to this Sketch using the element's Hash-implementation
     pub fn add(&mut self, v: impl hash::Hash) {
-        let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+        let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
         v.hash(&mut hasher);
         self.add_hash(hasher.digest128());
     }
