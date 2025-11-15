@@ -75,7 +75,7 @@
 //! assert!(sk_seeded.cardinality() > 1.0);
 //! ```
 
-use std::hash;
+use std::{hash, io};
 
 const P: u32 = 14;
 const M: u32 = 1 << P;
@@ -170,7 +170,6 @@ impl Sketch {
     fn add_hash(&mut self, h: u128) {
         let x: u64 = h as u64;
         let y: u64 = (h >> 64) as u64;
-        //let (x, y) = h;
         let k = x >> MAX;
         let lz = ((x << P) ^ MAXX).leading_zeros() as u8 + 1;
         let sig = (y << (64 - R) >> (64 - R)) as u16;
@@ -185,6 +184,14 @@ impl Sketch {
         let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
         v.hash(&mut hasher);
         self.add_hash(hasher.digest128());
+    }
+
+    /// Add a single element using the content of the given `io::Read`
+    pub fn add_reader(&mut self, mut r: impl io::Read) -> io::Result<u64> {
+        let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
+        let read = io::copy(&mut r, &mut hasher)?;
+        self.add_hash(hasher.digest128());
+        Ok(read)
     }
 
     /// Add a single element given by raw bytes to this Sketch
@@ -205,6 +212,14 @@ impl Sketch {
     /// Elements that hash equally but use different seed values are seen as unique elements.
     pub fn add_bytes_with_seed(&mut self, v: &[u8], seed: u64) {
         self.add_hash(xxhash_rust::xxh3::xxh3_128_with_seed(v, seed));
+    }
+
+    /// Add a single element using the content of the given `io::Read` and a seed value
+    pub fn add_reader_with_seed(&mut self, mut r: impl io::Read, seed: u64) -> io::Result<u64> {
+        let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
+        let read = io::copy(&mut r, &mut hasher)?;
+        self.add_hash(hasher.digest128());
+        Ok(read)
     }
 
     fn sum_and_zeros(&self) -> (f64, u16) {
@@ -384,5 +399,19 @@ mod tests {
             rel < 1e-3,
             "cardinality should be nearly identical with different seeds: c0={c0}, c1={c1}, rel={rel}"
         );
+    }
+
+    #[test]
+    fn add_io() {
+        let elemens = [&[b'a'; 640][..], &[b'b'; 30], &[b'c'; 1]];
+        let mut s1 = Sketch::default();
+        let mut s2 = Sketch::default();
+        for e in elemens {
+            s1.add_reader(e).unwrap();
+            s2.add_bytes(e);
+        }
+        assert_eq!(s1, s2);
+        let c = s1.cardinality();
+        assert!((2.9..=3.1).contains(&c));
     }
 }
