@@ -23,10 +23,16 @@ fn bench_add(c: &mut criterion::Criterion) {
 }
 
 fn bench_cardinality(c: &mut criterion::Criterion) {
-    let sk = (0..100).collect::<hyperminhash::Sketch>();
-    c.bench_function("Determine cardinality", |b| {
-        b.iter(|| black_box(sk.cardinality()))
-    });
+    let mut group = c.benchmark_group("Determine cardinality");
+    let mut b = |max: u64, name: &str| {
+        group.throughput(criterion::Throughput::Elements(max));
+        let sk = (0..max).collect::<hyperminhash::Sketch>();
+        group.bench_function(name, |b| b.iter(|| black_box(sk.cardinality())));
+    };
+    b(0, "Empty");
+    b(100, "Mostly empty");
+    b(10_000_000, "Filled");
+    group.finish();
 }
 
 fn bench_similarity(c: &mut criterion::Criterion) {
