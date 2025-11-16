@@ -19,8 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --no-default-features
-      - run: cargo check --all-features
+      - run: cargo check
 
   clippy:
     name: cargo clippy
@@ -31,7 +30,6 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --all --tests -- -D warnings
-      - run: cargo clippy --all-features --all --tests -- -D warnings
 
   test:
     name: cargo test
@@ -39,8 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --no-default-features
-      - run: cargo test --all-features
+      - run: cargo test
 
   semver:
     name: Semver check

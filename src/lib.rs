@@ -53,16 +53,12 @@
 //! assert!(sketch1.cardinality() > 14_800.0 && sketch1.cardinality() < 15_200.0);
 //!
 //!
-//! // If the `serialize`-feature is used, Sketches can be serialized/deserialized
-//! // from any Reader/Writer.
-//! #[cfg(feature = "serialize")]
-//! {
-//!     let mut buffer = Vec::new();
-//!     sketch1.save(&mut buffer).expect("Failed to write");
+//! // Sketches can be serialized/deserialized from any `io::Read`/`io::Write`.
+//! let mut buffer = Vec::new();
+//! sketch1.save(&mut buffer).expect("Failed to write");
 //!
-//!     let sketch2 = Sketch::load(&buffer[..]).expect("Failed to read");
-//!     assert_eq!(sketch1.cardinality(), sketch2.cardinality());
-//! }
+//! let sketch2 = Sketch::load(&buffer[..]).expect("Failed to read");
+//! assert_eq!(sketch1.cardinality(), sketch2.cardinality());
 //!
 //!
 //! // Use custom seed-values to distinguish elements that ordinarily
@@ -131,29 +127,6 @@ impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
 }
 
 impl Sketch {
-    /// Serialize this Sketch to the given writer
-    #[cfg(feature = "serialize")]
-    pub fn save<W: std::io::Write>(&self, writer: W) -> std::io::Result<()> {
-        use byteorder::WriteBytesExt;
-        let mut writer = writer;
-        for r in self.regs.iter() {
-            writer.write_u16::<byteorder::LittleEndian>(*r)?;
-        }
-        Ok(())
-    }
-
-    /// Deserialize a Sketch from the given reader
-    #[cfg(feature = "serialize")]
-    pub fn load<R: std::io::Read>(reader: R) -> std::io::Result<Self> {
-        use byteorder::ReadBytesExt;
-        let mut reader = reader;
-        let mut regs = [0; M as usize];
-        for r in regs.iter_mut() {
-            *r = reader.read_u16::<byteorder::LittleEndian>()?;
-        }
-        Ok(Self { regs })
-    }
-
     /// Construct an empty `Sketch`
     pub fn new() -> Self {
         Self::default()
@@ -410,6 +383,39 @@ impl Sketch {
     pub fn intersection(&self, other: &Self) -> f64 {
         let sim = self.similarity(other);
         sim * self.clone().union(other).cardinality() + 0.5
+    }
+
+    /// Serialize this Sketch to the given writer
+    ///
+    /// ```rust
+    /// let sk: hyperminhash::Sketch = (0..100).collect();
+    ///
+    /// let mut buffer = Vec::new();
+    /// sk.save(&mut buffer).expect("Failed to write");
+    /// ```
+    pub fn save(&self, mut writer: impl std::io::Write) -> std::io::Result<()> {
+        for r in self.regs {
+            writer.write_all(&r.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Deserialize a Sketch from the given reader
+    ///
+    /// ```rust
+    /// let reader = std::io::repeat(0);
+    ///
+    /// let sk = hyperminhash::Sketch::load(reader).expect("Failed to load");
+    /// assert!(sk.is_empty());
+    /// ```
+    pub fn load(mut reader: impl std::io::Read) -> std::io::Result<Self> {
+        let mut regs = [0; M as usize];
+        let mut buf = [0u8; 2];
+        for r in regs.iter_mut() {
+            reader.read_exact(&mut buf)?;
+            *r = u16::from_le_bytes(buf);
+        }
+        Ok(Self { regs })
     }
 }
 
