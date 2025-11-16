@@ -159,6 +159,20 @@ impl Sketch {
         Self::default()
     }
 
+    /// Returns `true` if this Sketch has a cardinality of exactly zero
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// assert!(sk.is_empty());
+    ///
+    /// sk.add(0);
+    /// assert!(!sk.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.regs.iter().all(|r| *r == 0)
+    }
+
     fn new_reg(lz: u8, sig: u16) -> u16 {
         (u16::from(lz) << R) | sig
     }
@@ -180,6 +194,14 @@ impl Sketch {
     }
 
     /// Add an element to this Sketch using the element's Hash-implementation
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// sk.add(42);
+    /// sk.add("The answer");
+    /// sk.add(vec![1, 2, 3]);
+    /// ```
     pub fn add(&mut self, v: impl hash::Hash) {
         let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
         v.hash(&mut hasher);
@@ -187,6 +209,12 @@ impl Sketch {
     }
 
     /// Add a single element using the content of the given `io::Read`
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// sk.add_reader(std::io::empty());
+    /// ```
     pub fn add_reader(&mut self, mut r: impl io::Read) -> io::Result<u64> {
         let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
         let read = io::copy(&mut r, &mut hasher)?;
@@ -195,12 +223,31 @@ impl Sketch {
     }
 
     /// Add a single element given by raw bytes to this Sketch
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// let buf: [u8; _] = [1, 2, 3];
+    /// sk.add_bytes(&buf);
+    /// ```
     pub fn add_bytes(&mut self, v: &[u8]) {
         self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
     }
 
     /// Add an element to this Sketch using the element's Hash-implementation and a seed-value
     /// Elements that hash equally but use different seed values are seen as unique elements.
+    ///
+    /// ```rust
+    /// const KILOGRAM: u64 = 1;
+    /// const POUNDS: u64 = 2;
+    ///
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// sk.add_with_seed(100, KILOGRAM);
+    /// sk.add_with_seed(100, POUNDS);
+    ///
+    /// assert!(sk.cardinality() > 1.0);
+    /// ```
     pub fn add_with_seed(&mut self, v: impl hash::Hash, seed: u64) {
         // Streaming hasher seeded:
         let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
@@ -244,12 +291,37 @@ impl Sketch {
     }
 
     /// The approximate number of unique elements in the set.
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// assert_eq!(sk.cardinality(), 0.0);
+    ///
+    /// for e in [1, 2, 3, 4, 5] {
+    ///     sk.add(e);
+    /// }
+    /// assert!(sk.cardinality() > 4.0);
+    /// assert!(sk.cardinality() < 6.0);
+    /// ```
     pub fn cardinality(&self) -> f64 {
         let (sum, ez) = self.sum_and_zeros();
         ALPHA * (f64::from(M)) * ((f64::from(M)) - f64::from(ez)) / (beta(ez) + sum)
     }
 
     /// Merge two sets, resulting in this set becoming the union-set.
+    ///
+    /// ```rust
+    /// let mut sk1 = hyperminhash::Sketch::new();
+    /// sk1.add(1);
+    /// sk1.add(2);
+    ///
+    /// let mut sk2 = hyperminhash::Sketch::new();
+    /// sk2.add(3);
+    /// sk2.add(4);
+    ///
+    /// sk1.union(&sk2);
+    /// assert_eq!(sk1, (1..=4).collect::<hyperminhash::Sketch>());
+    /// ```
     pub fn union<'a>(&'a mut self, other: &Self) -> &'a Self {
         for (r, rr) in self.regs.iter_mut().zip(other.regs.iter()) {
             if *r < *rr {
@@ -296,6 +368,12 @@ impl Sketch {
     }
 
     /// The Jaccard Index similarity estimation
+    ///
+    /// ```rust
+    /// let sk1 = (0..=75).collect::<hyperminhash::Sketch>();
+    /// let sk2 = (50..=125).collect::<hyperminhash::Sketch>();
+    /// assert!((sk1.similarity(&sk2) - (25.0 / 125.0)).abs() < 1e-2);
+    /// ```
     pub fn similarity(&self, other: &Self) -> f64 {
         let cc = self
             .regs
@@ -323,6 +401,12 @@ impl Sketch {
     }
 
     /// The approximate number of elements in both sets
+    ///
+    /// ```rust
+    /// let sk1 = (0..=750).collect::<hyperminhash::Sketch>();
+    /// let sk2 = (500..=1250).collect::<hyperminhash::Sketch>();
+    /// assert!((sk1.intersection(&sk2) - 250.0).abs() < 1.0);
+    /// ```
     pub fn intersection(&self, other: &Self) -> f64 {
         let sim = self.similarity(other);
         sim * self.clone().union(other).cardinality() + 0.5
@@ -336,8 +420,10 @@ mod tests {
     #[test]
     fn empty() {
         let mut sk = Sketch::new();
+        assert!(sk.is_empty());
         assert_eq!(sk.cardinality(), 0.0);
         sk.add(0);
+        assert!(!sk.is_empty());
         assert_ne!(sk.cardinality(), 0.0);
     }
 
