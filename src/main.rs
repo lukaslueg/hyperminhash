@@ -27,6 +27,7 @@ fn main() -> io::Result<()> {
             let sk2 = read(fname2);
             let mut sk1 = sk1.join().unwrap()?;
             let sk2 = sk2.join().unwrap()?;
+            println!("Similarity: {}", sk1.similarity(&sk2));
             println!("Intersection: {}", sk1.intersection(&sk2));
             println!("Union: {}", sk1.union(&sk2).cardinality());
         }

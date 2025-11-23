@@ -98,6 +98,47 @@ fn beta(ez: u16) -> f64 {
         + 0.000_424_19 * zl.powi(7)
 }
 
+struct EcTable {
+    ln1p_neg_b1: Box<[[f64; TR as usize]; TQ as usize]>,
+    ln1p_neg_b2: Box<[[f64; TR as usize]; TQ as usize]>,
+}
+
+impl EcTable {
+    fn new() -> Self {
+        let mut ln1p_neg_b1 = Box::new([[0.0; TR as usize]; TQ as usize]);
+        let mut ln1p_neg_b2 = Box::new([[0.0; TR as usize]; TQ as usize]);
+
+        // i in 1..TQ (exclusive upper bound), j in 1..TR (skip j=0)
+        for i in 1..TQ {
+            let row = (i as usize) - 1;
+            if i != TQ {
+                let den = 2f64.powf((P as f64) + (R as f64) + (i as f64));
+                for j1 in 1..TR {
+                    let j = j1 as f64;
+                    let b1 = (TR as f64 + j) / den;
+                    let b2 = (TR as f64 + j + 1.0) / den;
+                    ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
+                    ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+                }
+            } else {
+                let den = 2f64.powf((P as f64) + (R as f64) + (i as f64) - 1.0);
+                for j1 in 1..TR {
+                    let j = j1 as f64;
+                    let b1 = j / den;
+                    let b2 = (j + 1.0) / den;
+                    ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
+                    ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+                }
+            }
+        }
+
+        EcTable {
+            ln1p_neg_b1,
+            ln1p_neg_b2,
+        }
+    }
+}
+
 /// Records the approximate number of unique elements it has seen over it's lifetime.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Sketch {
@@ -318,26 +359,25 @@ impl Sketch {
     }
 
     fn expected_collisions(n: f64, m: f64) -> f64 {
+        static TBL: std::sync::LazyLock<EcTable> = std::sync::LazyLock::new(EcTable::new);
+        let tbl = &*TBL;
+
         let mut x = 0.0;
-        let mut b1: f64;
-        let mut b2: f64;
         for i in 1..TQ {
-            for j in 1..TR {
-                let j = f64::from(j);
-                if i != TQ {
-                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
-                    b1 = (f64::from(TR) + j) / den;
-                    b2 = (f64::from(TR) + j + 1.0) / den;
-                } else {
-                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
-                    b1 = j / den;
-                    b2 = (j + 1.0) / den;
-                }
-                let prx = (1.0 - b2).powf(n) - (1.0 - b1).powf(n);
-                let pry = (1.0 - b2).powf(m) - (1.0 - b1).powf(m);
-                x += prx * pry;
+            let row = (i as usize) - 1;
+            let l1 = &tbl.ln1p_neg_b1[row];
+            let l2 = &tbl.ln1p_neg_b2[row];
+
+            for j1 in 1..TR {
+                // (1 - b)^n = exp(n * ln1p(-b))
+                let a1 = (n * l2[j1 as usize]).exp();
+                let a0 = (n * l1[j1 as usize]).exp();
+                let b1 = (m * l2[j1 as usize]).exp();
+                let b0 = (m * l1[j1 as usize]).exp();
+                x += (a1 - a0) * (b1 - b0);
             }
         }
+
         (x * f64::from(P)) + 0.5
     }
 
