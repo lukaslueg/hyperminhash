@@ -243,8 +243,8 @@ impl Sketch {
     }
 
     fn sum_and_zeros(&self) -> (f64, u16) {
-        static L: std::sync::LazyLock<[f64; 256]> = std::sync::LazyLock::new(|| {
-            let mut l: [f64; 256] = [0.0; 256];
+        static L: std::sync::LazyLock<[f64; 64]> = std::sync::LazyLock::new(|| {
+            let mut l: [f64; 64] = [0.0; 64];
             for (i, v) in l.iter_mut().enumerate() {
                 *v = 1.0 / (2f64).powi(i32::try_from(i).unwrap());
             }
@@ -257,10 +257,11 @@ impl Sketch {
             let lz = Self::lz(reg);
             if lz == 0 {
                 ez += 1;
+            } else {
+                sum += l[lz as usize];
             }
-            sum += l[lz as usize];
         }
-        (sum, ez)
+        (sum + ez as f64, ez)
     }
 
     /// The approximate number of unique elements in the set.
