@@ -7,10 +7,9 @@
 //!   consumes 32kb of memory, allocated on the stack.
 //! * The amount of work done for counting a marginal element stays approximately constant.
 //!
-//! For sets smaller than roughly 10^4 to 10^5 unique elements, a `std::collections::HashSet`
-//! is usually faster, albeit using much more memory. When counting streams of millions of
-//! elements, `Hyperminhash` is much faster and uses much
-//! less memory.
+//! For sets smaller than roughly 10^4 unique elements, a `std::collections::HashSet` is usually faster,
+//! albeit using much more memory. When counting streams of millions of elements, `Hyperminhash` is much
+//! faster and uses much less memory.
 //!
 //! ```rust
 //! use hyperminhash::Sketch;
@@ -112,18 +111,18 @@ impl EcTable {
         for i in 1..TQ {
             let row = (i as usize) - 1;
             if i != TQ {
-                let den = 2f64.powf((P as f64) + (R as f64) + (i as f64));
+                let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
                 for j1 in 1..TR {
-                    let j = j1 as f64;
-                    let b1 = (TR as f64 + j) / den;
-                    let b2 = (TR as f64 + j + 1.0) / den;
+                    let j = f64::from(j1);
+                    let b1 = (f64::from(TR) + j) / den;
+                    let b2 = (f64::from(TR) + j + 1.0) / den;
                     ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
                     ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
                 }
             } else {
-                let den = 2f64.powf((P as f64) + (R as f64) + (i as f64) - 1.0);
+                let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
                 for j1 in 1..TR {
-                    let j = j1 as f64;
+                    let j = f64::from(j1);
                     let b1 = j / den;
                     let b2 = (j + 1.0) / den;
                     ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
@@ -169,6 +168,7 @@ impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
 
 impl Sketch {
     /// Construct an empty `Sketch`
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -183,6 +183,7 @@ impl Sketch {
     /// sk.add(0);
     /// assert!(!sk.is_empty());
     /// ```
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.regs.iter().all(|r| *r == 0)
     }
@@ -223,6 +224,9 @@ impl Sketch {
     }
 
     /// Add a single element using the content of the given `io::Read`
+    ///
+    /// # Errors
+    /// Returns I/O errors that occured while reading
     ///
     /// ```rust
     /// let mut sk = hyperminhash::Sketch::new();
@@ -276,6 +280,10 @@ impl Sketch {
     }
 
     /// Add a single element using the content of the given `io::Read` and a seed value
+    ///
+    /// # Errors
+    /// Returns I/O errors that occured while reading
+    ///
     pub fn add_reader_with_seed(&mut self, mut r: impl io::Read, seed: u64) -> io::Result<u64> {
         let mut hasher = xxhash_rust::xxh3::Xxh3::with_seed(seed);
         let read = io::copy(&mut r, &mut hasher)?;
@@ -302,7 +310,7 @@ impl Sketch {
                 sum += l[lz as usize];
             }
         }
-        (sum + ez as f64, ez)
+        (sum + f64::from(ez), ez)
     }
 
     /// The approximate number of unique elements in the set.
@@ -318,6 +326,7 @@ impl Sketch {
     /// assert!(sk.cardinality() > 4.0);
     /// assert!(sk.cardinality() < 6.0);
     /// ```
+    #[must_use]
     pub fn cardinality(&self) -> f64 {
         let (sum, ez) = self.sum_and_zeros();
         ALPHA * (f64::from(M)) * ((f64::from(M)) - f64::from(ez)) / (beta(ez) + sum)
@@ -388,6 +397,7 @@ impl Sketch {
     /// let sk2 = (50..=125).collect::<hyperminhash::Sketch>();
     /// assert!((sk1.similarity(&sk2) - (25.0 / 125.0)).abs() < 1e-2);
     /// ```
+    #[must_use]
     pub fn similarity(&self, other: &Self) -> f64 {
         let cc = self
             .regs
@@ -421,12 +431,16 @@ impl Sketch {
     /// let sk2 = (500..=1250).collect::<hyperminhash::Sketch>();
     /// assert!((sk1.intersection(&sk2) - 250.0).abs() < 1.0);
     /// ```
+    #[must_use]
     pub fn intersection(&self, other: &Self) -> f64 {
         let sim = self.similarity(other);
         sim * self.clone().union(other).cardinality() + 0.5
     }
 
     /// Serialize this Sketch to the given writer
+    ///
+    /// # Errors
+    /// Returns I/O errors that occured while writing
     ///
     /// ```rust
     /// let sk: hyperminhash::Sketch = (0..100).collect();
@@ -443,6 +457,9 @@ impl Sketch {
 
     /// Deserialize a Sketch from the given reader
     ///
+    /// # Errors
+    /// Returns I/O errors that occured while reading
+    ///
     /// ```rust
     /// let reader = std::io::repeat(0);
     ///
@@ -452,7 +469,7 @@ impl Sketch {
     pub fn load(mut reader: impl std::io::Read) -> std::io::Result<Self> {
         let mut regs = [0; M as usize];
         let mut buf = [0u8; 2];
-        for r in regs.iter_mut() {
+        for r in &mut regs {
             reader.read_exact(&mut buf)?;
             *r = u16::from_le_bytes(buf);
         }
