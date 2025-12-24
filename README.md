@@ -2,6 +2,7 @@
 
 [![Crates.io Version](https://img.shields.io/crates/v/hyperminhash.svg)](https://crates.io/crates/hyperminhash)
 [![Docs](https://docs.rs/hyperminhash/badge.svg)](https://docs.rs/hyperminhash)
+[![PyPI](https://badge.fury.io/py/pyhyperminhash.svg)](https://pypi.org/project/pyhyperminhash/)
 
 A straight port of [Hyperminhash](https://github.com/axiomhq/hyperminhash) for Rust.
 Very fast, constant memory-footprint cardinality approximation,
