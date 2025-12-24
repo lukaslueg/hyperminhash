@@ -16,7 +16,7 @@ xxhash-rust = { version = "0.8", features = [ "std", "xxh3" ] }
 rand = "0.9"
 crossbeam = "0.8"
 memchr = "2"
-criterion = "0.7"
+criterion = "0.8"
 walkdir = "2"
 
 [features]
