@@ -22,6 +22,24 @@ fn bench_add(c: &mut criterion::Criterion) {
     group.finish();
 }
 
+fn bench_bytes(c: &mut criterion::Criterion) {
+    let plot_config =
+        criterion::PlotConfiguration::default().summary_scale(criterion::AxisScale::Logarithmic);
+    let mut group = c.benchmark_group("Adding buffers");
+    group.plot_config(plot_config);
+    for i in [16usize, 128, 1024, 1024 * 1024, 10 * 1024 * 1024] {
+        group.throughput(criterion::Throughput::Bytes(i as u64));
+        let buf = vec![0; i];
+        let mut sk = hyperminhash::Sketch::new();
+        group.bench_with_input(
+            criterion::BenchmarkId::new("Add hashable object", i),
+            &i,
+            |b, _| b.iter(|| black_box(sk.add_bytes(black_box(&buf)))),
+        );
+    }
+    group.finish();
+}
+
 fn bench_cardinality(c: &mut criterion::Criterion) {
     let mut group = c.benchmark_group("Determine cardinality");
     let mut b = |max: u64, name: &str| {
@@ -83,6 +101,7 @@ criterion::criterion_group!(
     bench_cardinality,
     bench_similarity,
     bench_unique_integers,
-    bench_add
+    bench_add,
+    bench_bytes
 );
 criterion::criterion_main!(benches);

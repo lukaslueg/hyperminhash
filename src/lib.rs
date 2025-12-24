@@ -138,6 +138,75 @@ impl EcTable {
     }
 }
 
+/// A single (possibly unique) object yet-to-be-added to a `Sketch`.
+///
+/// Use `Entry` if what should constitute a single objects in a `Sketch` is comprised of multiple
+/// parts. For example, if the object can't fit in memory, you can create an `Entry`-object, and
+/// add multiple parts one by one.
+///
+/// One can use the `Clone`-implementation to effectively fork a larger object, which saves the
+/// cost to re-hash common parts.
+///
+/// ```rust
+/// let mut sk = hyperminhash::Sketch::new();
+///
+/// let mut user = hyperminhash::Entry::new();
+/// user.add("User1");
+///
+/// let mut page1 = user.clone();
+/// page1.add("Page1");
+/// sk.add_entry(&page1);
+///
+/// let mut page2 = user;
+/// page2.add("Page2");
+/// sk.add_entry(&page2);
+///
+/// // `sk` now effectively contains `("User1", "Page1")` and `("User1", "Page2")`
+///
+/// assert!(sk.cardinality() > 1.0)
+/// ```
+#[derive(Clone, Default)]
+pub struct Entry {
+    hasher: xxhash_rust::xxh3::Xxh3Default,
+}
+
+impl Entry {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Add an element to this `Entry` using the element's Hash-implementation
+    ///
+    /// ```rust
+    /// let mut e = hyperminhash::Entry::new();
+    /// e.add(42);
+    /// e.add("The answer");
+    /// ```
+    pub fn add(&mut self, v: impl hash::Hash) {
+        v.hash(&mut self.hasher);
+    }
+
+    /// Add an element using the content of the given `io::Read`
+    ///
+    /// # Errors
+    /// Returns I/O errors that occured while reading
+    ///
+    /// ```rust
+    /// let mut e = hyperminhash::Entry::new();
+    ///
+    /// e.add_reader(std::io::empty());
+    /// ```
+    pub fn add_reader(&mut self, mut r: impl io::Read) -> io::Result<u64> {
+        io::copy(&mut r, &mut self.hasher)
+    }
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        self.hasher.digest128() == other.hasher.digest128()
+    }
+}
+
 /// Records the approximate number of unique elements it has seen over it's lifetime.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Sketch {
@@ -163,6 +232,12 @@ impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
         let mut sk = Self::default();
         iter.into_iter().for_each(|v| sk.add(v));
         sk
+    }
+}
+
+impl PartialOrd for Sketch {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.cardinality().partial_cmp(&other.cardinality())
     }
 }
 
@@ -250,6 +325,26 @@ impl Sketch {
     /// ```
     pub fn add_bytes(&mut self, v: &[u8]) {
         self.add_hash(xxhash_rust::xxh3::xxh3_128(v));
+    }
+
+    /// Add a single element to this `Sketch`
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// let mut e = hyperminhash::Entry::new();
+    /// e.add(42);
+    /// e.add("The answer");
+    /// sk.add_entry(&e);
+    ///
+    /// e.add(b"Even more");
+    /// sk.add_entry(&e);
+    ///
+    /// // The `Sketch` now contains `(42, "The answer")` and `(42, "The answer", b"Even more")`
+    /// assert!(sk.cardinality() > 1.0);
+    /// ```
+    pub fn add_entry(&mut self, entry: &Entry) {
+        self.add_hash(entry.hasher.digest128())
     }
 
     /// Add an element to this Sketch using the element's Hash-implementation and a seed-value
@@ -489,6 +584,21 @@ mod tests {
         sk.add(0);
         assert!(!sk.is_empty());
         assert_ne!(sk.cardinality(), 0.0);
+    }
+
+    #[test]
+    fn eq() {
+        let mut sk1 = Sketch::new();
+        let mut sk2 = Sketch::new();
+        assert_eq!(sk1, sk2);
+        sk1.add("foo");
+        assert_ne!(sk1, sk2);
+        assert!(sk1 > sk2);
+        assert!(sk2 <= sk1);
+        sk2.add("foo");
+        assert_eq!(sk1, sk2);
+        assert!(sk1 >= sk2);
+        assert!(sk1 <= sk2);
     }
 
     #[test]
