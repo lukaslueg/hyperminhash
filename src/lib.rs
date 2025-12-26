@@ -72,6 +72,8 @@
 
 use std::{hash, io};
 
+const EMPTY_HASH: u128 = 0x99aa06d3014798d86001c324468d497f;
+
 const P: u32 = 14;
 const M: u32 = 1 << P;
 const MAX: u32 = 64 - P;
@@ -141,11 +143,11 @@ impl EcTable {
 /// A single (possibly unique) object yet-to-be-added to a `Sketch`.
 ///
 /// Use `Entry` if what should constitute a single objects in a `Sketch` is comprised of multiple
-/// parts. For example, if the object can't fit in memory, you can create an `Entry`-object, and
+/// parts. For example, if the object can't fit in memory, you can create an `Entry`-object and
 /// add multiple parts one by one.
 ///
 /// One can use the `Clone`-implementation to effectively fork a larger object, which saves the
-/// cost to re-hash common parts.
+/// cost to re-hash common prefixes.
 ///
 /// ```rust
 /// let mut sk = hyperminhash::Sketch::new();
@@ -171,19 +173,72 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Construct a new `Entry`.
+    ///
+    /// Notice that a new (empty) `Entry` is considered a unique object in a `Sketch`. All empty
+    /// `Entry` are the same, though.
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    /// assert!(sk.is_empty());
+    ///
+    /// let e = hyperminhash::Entry::new();
+    /// assert!(e.is_empty());
+    ///
+    /// sk.add_entry(&e);
+    /// assert!(!sk.is_empty());
+    /// ```
     pub fn new() -> Self {
         Default::default()
     }
 
-    /// Add an element to this `Entry` using the element's Hash-implementation
+    /// Add an element to this `Entry` using the element's Hash-implementation.
     ///
     /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
     /// let mut e = hyperminhash::Entry::new();
     /// e.add(42);
     /// e.add("The answer");
+    ///
+    /// sk.add_entry(&e);
+    /// assert!(!sk.is_empty());
+    /// assert!(sk.cardinality() < 2.0);
     /// ```
     pub fn add(&mut self, v: impl hash::Hash) {
         v.hash(&mut self.hasher);
+    }
+
+    /// Add data to this `Entry` in the form of raw bytes.
+    ///
+    /// This is different from using `.add::<&[u8]>()`: Most implementations of `std::hash::Hash` are
+    /// guaranteed to be prefix-collision-free, which means that all variations of `(a, b, c)`,
+    /// `(ab, c)`, `(a, bc)`, `...` are considered unique. This may not be desired when
+    /// constructing what should be considered a single object from multiple parts.
+    /// ```rust
+    /// let a = "a".as_bytes();
+    /// let bc = "bc".as_bytes();
+    /// let abc = "abc".as_bytes();
+    ///
+    /// // Two elements: `a` and `bc`
+    /// let mut e0 = hyperminhash::Entry::new();
+    /// e0.add(a);
+    /// e0.add(bc);
+    ///
+    /// // Two elements: `a` and `bc`, but as raw bytes
+    /// let mut e1 = hyperminhash::Entry::new();
+    /// e1.add_bytes(a);
+    /// e1.add_bytes(bc);
+    ///
+    /// // One element: `abc` as raw bytes
+    /// let mut e2 = hyperminhash::Entry::new();
+    /// e2.add_bytes(abc);
+    ///
+    /// assert_ne!(e0, e1); // `a bc` is not the same as `a bc`
+    /// assert_ne!(e0, e2); // `a bc` is not the same as `abc`
+    /// assert_eq!(e1, e2); // `a bc` is the same as `abc`
+    /// ```
+    pub fn add_bytes(&mut self, v: &[u8]) {
+        self.hasher.update(v);
     }
 
     /// Add an element using the content of the given `io::Read`
@@ -199,11 +254,35 @@ impl Entry {
     pub fn add_reader(&mut self, mut r: impl io::Read) -> io::Result<u64> {
         io::copy(&mut r, &mut self.hasher)
     }
+
+    /// Returns `true` if this `Entry` has a cardinality of exactly zero
+    /// ```rust
+    /// let mut e = hyperminhash::Entry::new();
+    /// assert!(e.is_empty());
+    /// e.add(42);
+    /// assert!(!e.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.hasher.digest128() == EMPTY_HASH
+    }
+
+    #[doc(hidden)]
+    pub fn digest(&self) -> u128 {
+        self.hasher.digest128()
+    }
 }
 
 impl PartialEq for Entry {
     fn eq(&self, other: &Self) -> bool {
         self.hasher.digest128() == other.hasher.digest128()
+    }
+}
+
+impl std::fmt::Debug for Entry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Entry")
+            .field("digest", &self.hasher.digest128())
+            .finish()
     }
 }
 
@@ -214,8 +293,10 @@ pub struct Sketch {
 }
 
 impl std::fmt::Debug for Sketch {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(fmt, "Sketch {{ {} }}", self.cardinality())
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Sketch")
+            .field("cardinality", &self.cardinality())
+            .finish()
     }
 }
 
@@ -576,6 +657,9 @@ impl Sketch {
 mod tests {
     use super::*;
 
+    const HASH_A: u128 = 0xa96faf705af16834e6c632b61e964e1f;
+    const HASH_AA: u128 = 0xb9fe94d346d39b20369242a646a19333;
+
     #[test]
     fn empty() {
         let mut sk = Sketch::new();
@@ -673,5 +757,21 @@ mod tests {
         assert_eq!(s1, s2);
         let c = s1.cardinality();
         assert!((2.9..=3.1).contains(&c));
+    }
+
+    #[test]
+    fn entry_consistency() {
+        let mut e = Entry::new();
+        assert_eq!(e.hasher.digest128(), EMPTY_HASH);
+        e.add_bytes(b"a");
+        assert_eq!(e.hasher.digest128(), HASH_A);
+        e.add_bytes(b"a");
+        assert_eq!(e.hasher.digest128(), HASH_AA);
+
+        let mut e2 = Entry::new();
+        e2.add_bytes(b"aa");
+        assert_eq!(e2.hasher.digest128(), HASH_AA);
+
+        assert_eq!(e, e2);
     }
 }
