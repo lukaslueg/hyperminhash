@@ -54,11 +54,27 @@ fn bench_cardinality(c: &mut criterion::Criterion) {
 }
 
 fn bench_similarity(c: &mut criterion::Criterion) {
-    let sk1 = (0..100).collect::<hyperminhash::Sketch>();
-    let sk2 = (50..150).collect::<hyperminhash::Sketch>();
-    c.bench_function("Determine similarity index", |b| {
-        b.iter(|| black_box(sk1.similarity(&sk2)))
+    let mut group = c.benchmark_group("Determine similarity index");
+
+    let small_a = (0..100).collect::<hyperminhash::Sketch>();
+    let small_b = (50..150).collect::<hyperminhash::Sketch>();
+    group.bench_function("small/high-precision", |b| {
+        b.iter(|| black_box(small_a.similarity(&small_b)))
     });
+    group.bench_function("small/fast", |b| {
+        b.iter(|| black_box(small_a.similarity_fast(&small_b)))
+    });
+
+    let large_a = (0..1_000_000).collect::<hyperminhash::Sketch>();
+    let large_b = (500_000..1_500_000).collect::<hyperminhash::Sketch>();
+    group.bench_function("large/high-precision", |b| {
+        b.iter(|| black_box(large_a.similarity(&large_b)))
+    });
+    group.bench_function("large/fast", |b| {
+        b.iter(|| black_box(large_a.similarity_fast(&large_b)))
+    });
+
+    group.finish();
 }
 
 fn bench_unique_integers(c: &mut criterion::Criterion) {
