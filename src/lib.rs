@@ -109,26 +109,29 @@ impl EcTable {
         let mut ln1p_neg_b1 = Box::new([[0.0; TR as usize]; TQ as usize]);
         let mut ln1p_neg_b2 = Box::new([[0.0; TR as usize]; TQ as usize]);
 
-        // i in 1..TQ (exclusive upper bound), j in 1..TR (skip j=0)
-        for i in 1..TQ {
+        // Store the inclusive i in 1..=TQ and j in 1..=TR ranges using
+        // zero-based row/column indexes.
+        for i in 1..=TQ {
             let row = (i as usize) - 1;
             if i != TQ {
                 let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
-                for j1 in 1..TR {
+                for j1 in 1..=TR {
+                    let col = (j1 as usize) - 1;
                     let j = f64::from(j1);
                     let b1 = (f64::from(TR) + j) / den;
                     let b2 = (f64::from(TR) + j + 1.0) / den;
-                    ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
-                    ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+                    ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
+                    ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
                 }
             } else {
                 let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
-                for j1 in 1..TR {
+                for j1 in 1..=TR {
+                    let col = (j1 as usize) - 1;
                     let j = f64::from(j1);
                     let b1 = j / den;
                     let b2 = (j + 1.0) / den;
-                    ln1p_neg_b1[row][j1 as usize] = f64::ln_1p(-b1);
-                    ln1p_neg_b2[row][j1 as usize] = f64::ln_1p(-b2);
+                    ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
+                    ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
                 }
             }
         }
@@ -548,17 +551,18 @@ impl Sketch {
         let tbl = &*TBL;
 
         let mut x = 0.0;
-        for i in 1..TQ {
+        for i in 1..=TQ {
             let row = (i as usize) - 1;
             let l1 = &tbl.ln1p_neg_b1[row];
             let l2 = &tbl.ln1p_neg_b2[row];
 
-            for j1 in 1..TR {
+            for j1 in 1..=TR {
+                let col = (j1 as usize) - 1;
                 // (1 - b)^n = exp(n * ln1p(-b))
-                let a1 = (n * l2[j1 as usize]).exp();
-                let a0 = (n * l1[j1 as usize]).exp();
-                let b1 = (m * l2[j1 as usize]).exp();
-                let b0 = (m * l1[j1 as usize]).exp();
+                let a1 = (n * l2[col]).exp();
+                let a0 = (n * l1[col]).exp();
+                let b1 = (m * l2[col]).exp();
+                let b0 = (m * l1[col]).exp();
                 x += (a1 - a0) * (b1 - b0);
             }
         }
