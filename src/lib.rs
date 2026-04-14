@@ -537,7 +537,7 @@ impl Sketch {
             f64::INFINITY
         } else if n > 2f64.powf(f64::from(P) + 5.0) {
             let d = (4.0 * n / m) / ((1.0 + n) / m).powi(2);
-            C * 2f64.powf(f64::from(P) - f64::from(R)) * d + 0.5
+            C * 2f64.powf(f64::from(P) - f64::from(R)) * d
         } else {
             Self::expected_collisions(n, m) / f64::from(P)
         }
@@ -563,7 +563,7 @@ impl Sketch {
             }
         }
 
-        (x * f64::from(P)) + 0.5
+        x * f64::from(P)
     }
 
     /// The Jaccard Index similarity estimation
@@ -609,8 +609,7 @@ impl Sketch {
     /// ```
     #[must_use]
     pub fn intersection(&self, other: &Self) -> f64 {
-        let sim = self.similarity(other);
-        sim * self.clone().union(other).cardinality() + 0.5
+        self.similarity(other) * self.clone().union(other).cardinality()
     }
 
     /// Serialize this Sketch to the given writer
@@ -695,6 +694,30 @@ mod tests {
         assert!((sk2.cardinality() - exp2).abs() / exp2 < 0.01);
         let exp_is = 45_000.0;
         assert!((sk1.intersection(&sk2) - exp_is).abs() / exp_is < 0.01);
+    }
+
+    #[test]
+    fn intersection_of_disjoint_sketches_is_zero() {
+        let sk1: Sketch = (0..1_000).collect();
+        let sk2: Sketch = (1_000..2_000).collect();
+        assert_eq!(sk1.similarity(&sk2), 0.0);
+        assert_eq!(sk1.intersection(&sk2), 0.0);
+    }
+
+    #[test]
+    fn similarity_of_identical_single_register_sketches_is_one() {
+        // Construct a serialized sketch with exactly one non-empty register and
+        // deserialize it twice. The sketches are bit-identical and therefore
+        // must have Jaccard similarity 1.0. This guards against introducing
+        // bias in the expected-collision correction for exact matches.
+        let mut serialized = vec![0u8; (M as usize) * std::mem::size_of::<u16>()];
+        serialized[..2].copy_from_slice(&Sketch::new_reg(1, 0).to_le_bytes());
+
+        let sk1 = Sketch::load(&serialized[..]).unwrap();
+        let sk2 = Sketch::load(&serialized[..]).unwrap();
+
+        assert!((sk1.cardinality() - 1.0).abs() < 1e-3);
+        assert!((sk1.similarity(&sk2) - 1.0).abs() < 1e-9);
     }
 
     #[test]
