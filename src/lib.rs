@@ -481,7 +481,7 @@ impl Sketch {
         let l = &*L;
         let mut sum = 0.0;
         let mut ez: u16 = 0;
-        for reg in self.regs {
+        for &reg in &self.regs {
             let lz = Self::lz(reg);
             if lz == 0 {
                 ez += 1;
@@ -534,6 +534,72 @@ impl Sketch {
         self
     }
 
+    fn cardinality_from_parts(sum: f64, ez: u16) -> f64 {
+        ALPHA * (f64::from(M)) * ((f64::from(M)) - f64::from(ez)) / (beta(ez) + sum)
+    }
+
+    fn overlap_counts(&self, other: &Self) -> (u32, u32) {
+        let mut cc = 0;
+        let mut cn = 0;
+        for (&left, &right) in self.regs.iter().zip(other.regs.iter()) {
+            if left != 0 || right != 0 {
+                cn += 1;
+                if left != 0 && left == right {
+                    cc += 1;
+                }
+            }
+        }
+        (cc, cn)
+    }
+
+    fn comparison_stats(&self, other: &Self) -> ComparisonStats {
+        static L: std::sync::LazyLock<[f64; 64]> = std::sync::LazyLock::new(|| {
+            let mut l: [f64; 64] = [0.0; 64];
+            for (i, v) in l.iter_mut().enumerate() {
+                *v = 1.0 / (2f64).powi(i32::try_from(i).unwrap());
+            }
+            l
+        });
+        let l = &*L;
+
+        let mut stats = ComparisonStats::default();
+        for (&left, &right) in self.regs.iter().zip(other.regs.iter()) {
+            if left != 0 || right != 0 {
+                stats.cn += 1;
+                if left != 0 && left == right {
+                    stats.cc += 1;
+                }
+            }
+
+            let left_lz = Self::lz(left);
+            if left_lz == 0 {
+                stats.left_ez += 1;
+            } else {
+                stats.left_sum += l[left_lz as usize];
+            }
+
+            let right_lz = Self::lz(right);
+            if right_lz == 0 {
+                stats.right_ez += 1;
+            } else {
+                stats.right_sum += l[right_lz as usize];
+            }
+
+            let union = left.max(right);
+            let union_lz = Self::lz(union);
+            if union_lz == 0 {
+                stats.union_ez += 1;
+            } else {
+                stats.union_sum += l[union_lz as usize];
+            }
+        }
+
+        stats.left_sum += f64::from(stats.left_ez);
+        stats.right_sum += f64::from(stats.right_ez);
+        stats.union_sum += f64::from(stats.union_ez);
+        stats
+    }
+
     fn approximate_expected_collisions(n: f64, m: f64) -> f64 {
         let (n, m) = (n.max(m), n.min(m));
         if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
@@ -571,29 +637,24 @@ impl Sketch {
     }
 
     fn similarity_impl(&self, other: &Self, high_precision: bool) -> f64 {
-        let cc = self
-            .regs
-            .iter()
-            .zip(other.regs.iter())
-            .filter(|(r, rr)| **r != 0 && r == rr)
-            .count();
-        let cn = self
-            .regs
-            .iter()
-            .zip(other.regs.iter())
-            .filter(|(r, rr)| **r != 0 || **rr != 0)
-            .count();
+        let (cc, cn, ec) = if high_precision {
+            let stats = self.comparison_stats(other);
+            let n = Self::cardinality_from_parts(stats.left_sum, stats.left_ez);
+            let m = Self::cardinality_from_parts(stats.right_sum, stats.right_ez);
+            (
+                stats.cc,
+                stats.cn,
+                Self::approximate_expected_collisions(n, m),
+            )
+        } else {
+            let (cc, cn) = self.overlap_counts(other);
+            (cc, cn, 0.0)
+        };
+
         if cc == 0 {
             return 0.0;
         }
 
-        let ec = if high_precision {
-            let n = self.cardinality();
-            let m = other.cardinality();
-            Self::approximate_expected_collisions(n, m)
-        } else {
-            0.0
-        };
         if (cc as f64) < ec {
             return 0.0;
         }
@@ -647,7 +708,24 @@ impl Sketch {
     /// ```
     #[must_use]
     pub fn intersection(&self, other: &Self) -> f64 {
-        self.similarity(other) * self.clone().union(other).cardinality()
+        if self == other {
+            return self.cardinality();
+        }
+        let stats = self.comparison_stats(other);
+        if stats.cc == 0 {
+            return 0.0;
+        }
+
+        let n = Self::cardinality_from_parts(stats.left_sum, stats.left_ez);
+        let m = Self::cardinality_from_parts(stats.right_sum, stats.right_ez);
+        let ec = Self::approximate_expected_collisions(n, m);
+        if (stats.cc as f64) < ec {
+            return 0.0;
+        }
+
+        let similarity = (stats.cc as f64 - ec) / stats.cn as f64;
+        let union = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
+        similarity * union
     }
 
     /// A faster intersection estimate with the same looser correction model as
@@ -658,7 +736,17 @@ impl Sketch {
     /// drift is typically tiny as well.
     #[must_use]
     pub fn intersection_fast(&self, other: &Self) -> f64 {
-        self.similarity_fast(other) * self.clone().union(other).cardinality()
+        if self == other {
+            return self.cardinality();
+        }
+        let stats = self.comparison_stats(other);
+        if stats.cc == 0 {
+            return 0.0;
+        }
+
+        let similarity = stats.cc as f64 / stats.cn as f64;
+        let union = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
+        similarity * union
     }
 
     /// Serialize this Sketch to the given writer
@@ -699,6 +787,18 @@ impl Sketch {
         }
         Ok(Self { regs })
     }
+}
+
+#[derive(Default)]
+struct ComparisonStats {
+    cc: u32,
+    cn: u32,
+    left_sum: f64,
+    left_ez: u16,
+    right_sum: f64,
+    right_ez: u16,
+    union_sum: f64,
+    union_ez: u16,
 }
 
 #[cfg(test)]
