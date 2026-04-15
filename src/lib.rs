@@ -615,6 +615,9 @@ impl Sketch {
     /// ```
     #[must_use]
     pub fn similarity(&self, other: &Self) -> f64 {
+        if self == other {
+            return 1.0;
+        }
         self.similarity_impl(other, true)
     }
 
@@ -624,6 +627,9 @@ impl Sketch {
     /// from [`Sketch::similarity`], the absolute drift stayed below `1.3e-5`.
     #[must_use]
     pub fn similarity_fast(&self, other: &Self) -> f64 {
+        if self == other {
+            return 1.0;
+        }
         self.similarity_impl(other, false)
     }
 
