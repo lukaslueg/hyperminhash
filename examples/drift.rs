@@ -1,5 +1,5 @@
 use crossbeam::thread;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use std::{collections::BTreeMap, env, process};
 
 const DEFAULT_TRIALS: usize = 20_480;

@@ -13,7 +13,7 @@ license = "MIT"
 xxhash-rust = { version = "0.8", features = [ "std", "xxh3" ] }
 
 [dev-dependencies]
-rand = "0.9"
+rand = "0.10"
 crossbeam = "0.8"
 memchr = "2"
 criterion = "0.8"
