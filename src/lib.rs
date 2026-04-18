@@ -89,6 +89,24 @@ const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
 
+// Lookup table of 2^-i for i in 0..64, used to accumulate register contributions
+// during cardinality / similarity estimation. Built at compile time via
+// `f64::from_bits` (const since 1.83): for i in 0..=63 the biased exponent is
+// 1023 - i (all normal, no subnormals) and the mantissa is 0, so each entry is
+// an exact IEEE-754 power of two on every target.
+//
+// Note: L[0] == 1.0, which lets the hot loops accumulate the "leading-zeros
+// is zero" case branchlessly as `sum += L[lz]` rather than a conditional.
+static L: [f64; 64] = {
+    let mut l = [0.0f64; 64];
+    let mut i = 0u64;
+    while i < 64 {
+        l[i as usize] = f64::from_bits((1023 - i) << 52);
+        i += 1;
+    }
+    l
+};
+
 fn beta(ez: u16) -> f64 {
     let zl = (f64::from(ez) + 1.0).ln();
     -0.370_393_911 * f64::from(ez)
@@ -473,25 +491,24 @@ impl Sketch {
     }
 
     fn sum_and_zeros(&self) -> (f64, u16) {
-        static L: std::sync::LazyLock<[f64; 64]> = std::sync::LazyLock::new(|| {
-            let mut l: [f64; 64] = [0.0; 64];
-            for (i, v) in l.iter_mut().enumerate() {
-                *v = 1.0 / (2f64).powi(i32::try_from(i).unwrap());
-            }
-            l
-        });
-        let l = &*L;
-        let mut sum = 0.0;
-        let mut ez: u16 = 0;
-        for &reg in &self.regs {
-            let lz = Self::lz(reg);
-            if lz == 0 {
-                ez += 1;
-            } else {
-                sum += l[lz as usize];
+        // Accumulate across independent lanes to break the serial f64-add
+        // dependency chain. f64 addition is non-associative so the compiler
+        // cannot do this on its own. M = 16384 is a multiple of LANES,
+        // so no remainder handling is needed. L[0] == 1.0 makes the
+        // `lz == 0` case a branchless `sum += L[0]`.
+        const LANES: usize = 8;
+        let mut sums = [0.0f64; LANES];
+        let mut ezs = [0u16; LANES];
+        for chunk in self.regs.chunks_exact(LANES) {
+            for i in 0..LANES {
+                let lz = Self::lz(chunk[i]);
+                sums[i] += L[lz as usize];
+                ezs[i] += u16::from(lz == 0);
             }
         }
-        (sum + f64::from(ez), ez)
+        let sum: f64 = sums.iter().sum();
+        let ez: u16 = ezs.iter().sum();
+        (sum, ez)
     }
 
     /// The approximate number of unique elements in the set.
@@ -541,65 +558,95 @@ impl Sketch {
     }
 
     fn overlap_counts(&self, other: &Self) -> (u32, u32) {
-        let mut cc = 0;
-        let mut cn = 0;
-        for (&left, &right) in self.regs.iter().zip(other.regs.iter()) {
-            if left != 0 || right != 0 {
-                cn += 1;
-                if left != 0 && left == right {
-                    cc += 1;
-                }
+        // Branchless, fixed-chunk formulation to encourage LLVM to emit
+        // u16-wide SIMD (NEON `cmeq`/`sub`, SSE2 `pcmpeqw`/`psubw`).
+        // Per-lane u16 accumulators cap at `M / LANES = 1024` which fits
+        // in u16 with headroom.
+        const LANES: usize = 16;
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
             }
         }
+        let cc: u32 = cc_lanes.iter().map(|&x| u32::from(x)).sum();
+        let cn: u32 = cn_lanes.iter().map(|&x| u32::from(x)).sum();
         (cc, cn)
     }
 
     fn comparison_stats(&self, other: &Self) -> ComparisonStats {
-        static L: std::sync::LazyLock<[f64; 64]> = std::sync::LazyLock::new(|| {
-            let mut l: [f64; 64] = [0.0; 64];
-            for (i, v) in l.iter_mut().enumerate() {
-                *v = 1.0 / (2f64).powi(i32::try_from(i).unwrap());
-            }
-            l
-        });
-        let l = &*L;
+        // Two-phase per chunk:
+        //   Phase A (u16-only, auto-vectorizable): compute `union_reg = max`,
+        //   extract the three lz values, and accumulate `ez`, `cn`, `cc`.
+        //   All ops are element-wise u16 arithmetic / compares, which LLVM
+        //   can lower to NEON `umax`/`cmeq`/`sub` or SSE2 `pmaxuw`/`pcmpeqw`.
+        //
+        //   Phase B (scalar FP gather + multi-lane fadd): index `L[]` with
+        //   the lz values staged in Phase A and accumulate into independent
+        //   lanes to hide fadd latency (non-associative, compiler can't do
+        //   this on its own).
+        //
+        // M is a multiple of LANES, so no remainder handling is needed.
+        const LANES: usize = 8;
 
-        let mut stats = ComparisonStats::default();
-        for (&left, &right) in self.regs.iter().zip(other.regs.iter()) {
-            if left != 0 || right != 0 {
-                stats.cn += 1;
-                if left != 0 && left == right {
-                    stats.cc += 1;
-                }
+        let mut left_sums = [0.0f64; LANES];
+        let mut right_sums = [0.0f64; LANES];
+        let mut union_sums = [0.0f64; LANES];
+        let mut left_ez_lanes = [0u16; LANES];
+        let mut right_ez_lanes = [0u16; LANES];
+        let mut union_ez_lanes = [0u16; LANES];
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            // Phase A: pure u16 work.
+            let mut left_lz = [0u8; LANES];
+            let mut right_lz = [0u8; LANES];
+            let mut union_lz = [0u8; LANES];
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                let u = l.max(r);
+                left_lz[i] = Self::lz(l);
+                right_lz[i] = Self::lz(r);
+                union_lz[i] = Self::lz(u);
+                left_ez_lanes[i] += u16::from(l < (1u16 << R));
+                right_ez_lanes[i] += u16::from(r < (1u16 << R));
+                union_ez_lanes[i] += u16::from(u < (1u16 << R));
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
             }
 
-            let left_lz = Self::lz(left);
-            if left_lz == 0 {
-                stats.left_ez += 1;
-            } else {
-                stats.left_sum += l[left_lz as usize];
-            }
-
-            let right_lz = Self::lz(right);
-            if right_lz == 0 {
-                stats.right_ez += 1;
-            } else {
-                stats.right_sum += l[right_lz as usize];
-            }
-
-            let union = left.max(right);
-            let union_lz = Self::lz(union);
-            if union_lz == 0 {
-                stats.union_ez += 1;
-            } else {
-                stats.union_sum += l[union_lz as usize];
+            // Phase B: scalar gather + fadd per lane.
+            for i in 0..LANES {
+                left_sums[i] += L[left_lz[i] as usize];
+                right_sums[i] += L[right_lz[i] as usize];
+                union_sums[i] += L[union_lz[i] as usize];
             }
         }
 
-        stats.left_sum += f64::from(stats.left_ez);
-        stats.right_sum += f64::from(stats.right_ez);
-        stats.union_sum += f64::from(stats.union_ez);
-        stats
+        ComparisonStats {
+            left_sum: left_sums.iter().sum(),
+            right_sum: right_sums.iter().sum(),
+            union_sum: union_sums.iter().sum(),
+            left_ez: left_ez_lanes.iter().sum(),
+            right_ez: right_ez_lanes.iter().sum(),
+            union_ez: union_ez_lanes.iter().sum(),
+            cc: cc_lanes.iter().map(|&x| u32::from(x)).sum(),
+            cn: cn_lanes.iter().map(|&x| u32::from(x)).sum(),
+        }
     }
 
     fn approximate_expected_collisions(n: f64, m: f64) -> f64 {
