@@ -8,6 +8,7 @@ description = "Fast, constant-memory cardinality approximation"
 edition = "2024"
 readme = "README.md"
 license = "MIT"
+exclude = [ "examples/drift.png" ]
 
 [dependencies]
 xxhash-rust = { version = "0.8", features = [ "std", "xxh3" ] }
