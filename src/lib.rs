@@ -7,11 +7,10 @@
 //!   consumes 32kb of memory, allocated on the stack.
 //! * The amount of work done for counting a marginal element stays approximately constant.
 //!
-//! For sets smaller than roughly 10^3 unique elements, a `std::collections::HashSet` is usually faster,
-//! albeit using much more memory. When counting streams of millions of elements, `Hyperminhash` is much
-//! faster and uses much less memory. The same applies when repeatedly comparing large sets: once
-//! two `Sketch` values have been built, estimating their overlap is very fast and does not revisit
-//! the original elements.
+//! For sets smaller than roughly 10^3 unique elements, a `std::collections::HashSet` is usually faster.
+//! When counting streams of millions of elements, `Hyperminhash` is much faster and uses much less memory.
+//! The same applies when repeatedly comparing large sets: once two `Sketch` values have been built,
+//! estimating their overlap is very fast and does not revisit the original elements.
 //!
 //! ```rust
 //! use hyperminhash::Sketch;
@@ -914,7 +913,7 @@ impl Sketch {
     /// [`Sketch::similarity`] values in order.
     ///
     /// Results are bit-identical to calling [`Sketch::similarity`] on each
-    /// pair. Using this method may amortize some of the cost when compareing
+    /// pair. Using this method may amortize some of the cost when comparing
     /// one `Sketch` against many others.
     ///
     /// ```rust
