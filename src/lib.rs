@@ -119,6 +119,8 @@ fn beta(ez: u16) -> f64 {
         + 0.000_424_19 * zl.powi(7)
 }
 
+static TBL: std::sync::LazyLock<EcTable> = std::sync::LazyLock::new(EcTable::new);
+
 struct EcTable {
     ln1p_neg_b1: Box<[[f64; TR as usize]; TQ as usize]>,
     ln1p_neg_b2: Box<[[f64; TR as usize]; TQ as usize]>,
@@ -662,7 +664,6 @@ impl Sketch {
     }
 
     fn expected_collisions(n: f64, m: f64) -> f64 {
-        static TBL: std::sync::LazyLock<EcTable> = std::sync::LazyLock::new(EcTable::new);
         let tbl = &*TBL;
 
         let mut x = 0.0;
@@ -683,6 +684,117 @@ impl Sketch {
         }
 
         x * f64::from(P)
+    }
+
+    // Precompute `(n * ln1p_neg_b2).exp() - (n * ln1p_neg_b1).exp()` for every
+    // cell of the `EcTable`. Bit-identical to the `a1 - a0` subexpression in
+    // `expected_collisions`. Cost: ~131K `exp()` calls, 512 KB heap.
+    fn precompute_a_diff(n: f64) -> Box<ADiff> {
+        let tbl = &*TBL;
+        let mut out: Box<ADiff> = Box::new([[0.0; TR as usize]; TQ as usize]);
+        for i in 1..=TQ {
+            let row = (i as usize) - 1;
+            let l1 = &tbl.ln1p_neg_b1[row];
+            let l2 = &tbl.ln1p_neg_b2[row];
+            let o = &mut out[row];
+            for j1 in 1..=TR {
+                let col = (j1 as usize) - 1;
+                let a1 = (n * l2[col]).exp();
+                let a0 = (n * l1[col]).exp();
+                o[col] = a1 - a0;
+            }
+        }
+        out
+    }
+
+    // `expected_collisions` variant that consumes a precomputed `a_diff` for
+    // one side (self) and only does the `exp()` work for the other side.
+    // Preserves row-major `(i, j1)` accumulation order and per-cell multiply
+    // shape of `expected_collisions`, so the resulting `f64` is bit-identical
+    // regardless of which side (self/other) is the larger cardinality (IEEE
+    // float multiplication is commutative).
+    fn expected_collisions_with_a_diff(a_diff: &ADiff, m: f64) -> f64 {
+        let tbl = &*TBL;
+        let mut x = 0.0;
+        for i in 1..=TQ {
+            let row = (i as usize) - 1;
+            let l1 = &tbl.ln1p_neg_b1[row];
+            let l2 = &tbl.ln1p_neg_b2[row];
+            let ad = &a_diff[row];
+            for j1 in 1..=TR {
+                let col = (j1 as usize) - 1;
+                let b1 = (m * l2[col]).exp();
+                let b0 = (m * l1[col]).exp();
+                x += ad[col] * (b1 - b0);
+            }
+        }
+        x * f64::from(P)
+    }
+
+    fn approximate_expected_collisions_with_a_diff(
+        a_diff: &ADiff,
+        n_self: f64,
+        m_other: f64,
+    ) -> f64 {
+        let (big, small) = (n_self.max(m_other), n_self.min(m_other));
+        if big > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
+            f64::INFINITY
+        } else if big > 2f64.powf(f64::from(P) + 5.0) {
+            let d = (4.0 * big / small) / ((1.0 + big) / small).powi(2);
+            C * 2f64.powf(f64::from(P) - f64::from(R)) * d
+        } else {
+            Self::expected_collisions_with_a_diff(a_diff, m_other) / f64::from(P)
+        }
+    }
+
+    // Right-side + union analogue of `comparison_stats` — omits `left_sum` /
+    // `left_ez` since the caller already has them from `sum_and_zeros(self)`.
+    // Preserves per-lane accumulation shape of `comparison_stats` so per-field
+    // values match bit-for-bit.
+    #[inline(always)]
+    fn right_and_union_stats(&self, other: &Self) -> PartialStats {
+        const LANES: usize = 8;
+
+        let mut right_sums = [0.0f64; LANES];
+        let mut union_sums = [0.0f64; LANES];
+        let mut right_ez_lanes = [0u16; LANES];
+        let mut union_ez_lanes = [0u16; LANES];
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            let mut right_lz = [0u8; LANES];
+            let mut union_lz = [0u8; LANES];
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                let u = l.max(r);
+                right_lz[i] = Self::lz(r);
+                union_lz[i] = Self::lz(u);
+                right_ez_lanes[i] += u16::from(r < (1u16 << R));
+                union_ez_lanes[i] += u16::from(u < (1u16 << R));
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
+            }
+
+            for i in 0..LANES {
+                right_sums[i] += L[right_lz[i] as usize];
+                union_sums[i] += L[union_lz[i] as usize];
+            }
+        }
+
+        PartialStats {
+            right_sum: right_sums.iter().sum(),
+            right_ez: right_ez_lanes.iter().sum(),
+            union_sum: union_sums.iter().sum(),
+            union_ez: union_ez_lanes.iter().sum(),
+            cc: cc_lanes.iter().map(|&x| u32::from(x)).sum(),
+            cn: cn_lanes.iter().map(|&x| u32::from(x)).sum(),
+        }
     }
 
     fn similarity_impl(&self, other: &Self, high_precision: bool) -> f64 {
@@ -773,8 +885,8 @@ impl Sketch {
         }
 
         let similarity = (stats.cc as f64 - ec) / stats.cn as f64;
-        let union = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
-        similarity * union
+        let union_card = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
+        similarity * union_card
     }
 
     /// A faster intersection estimate with the same looser correction model as
@@ -794,8 +906,69 @@ impl Sketch {
         }
 
         let similarity = stats.cc as f64 / stats.cn as f64;
-        let union = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
-        similarity * union
+        let union_card = Self::cardinality_from_parts(stats.union_sum, stats.union_ez);
+        similarity * union_card
+    }
+
+    /// Compare `self` against each `Sketch` in `others`, yielding
+    /// [`Sketch::similarity`] values in order.
+    ///
+    /// Results are bit-identical to calling [`Sketch::similarity`] on each
+    /// pair. Using this method may amortize some of the cost when compareing
+    /// one `Sketch` against many others.
+    ///
+    /// ```rust
+    /// let a: hyperminhash::Sketch = (0..1_000).collect();
+    /// let others: Vec<hyperminhash::Sketch> = (0..4)
+    ///     .map(|k| ((k * 250)..(k * 250 + 1_000)).collect())
+    ///     .collect();
+    /// let got: Vec<f64> = a.similarity_many(others.iter()).collect();
+    /// let want: Vec<f64> = others.iter().map(|o| a.similarity(o)).collect();
+    /// assert_eq!(got, want);
+    /// ```
+    pub fn similarity_many<'a, I>(&'a self, others: I) -> BatchIter<'a, I::IntoIter>
+    where
+        I: IntoIterator<Item = &'a Sketch>,
+        I::IntoIter: 'a,
+    {
+        BatchIter::new(self, others.into_iter(), BatchKind::Similarity, true)
+    }
+
+    /// Batched [`Sketch::similarity_fast`].
+    ///
+    /// Provided for API symmetry with [`Sketch::similarity_many`] — results
+    /// are bit-identical to calling [`Sketch::similarity_fast`] on each pair,
+    /// **but this method is not faster than the per-pair loop**.
+    pub fn similarity_many_fast<'a, I>(&'a self, others: I) -> BatchIter<'a, I::IntoIter>
+    where
+        I: IntoIterator<Item = &'a Sketch>,
+        I::IntoIter: 'a,
+    {
+        BatchIter::new(self, others.into_iter(), BatchKind::Similarity, false)
+    }
+
+    /// Batched [`Sketch::intersection`]. Bit-identical to the per-pair call.
+    ///
+    /// See [`Sketch::similarity_many`] for details.
+    pub fn intersection_many<'a, I>(&'a self, others: I) -> BatchIter<'a, I::IntoIter>
+    where
+        I: IntoIterator<Item = &'a Sketch>,
+        I::IntoIter: 'a,
+    {
+        BatchIter::new(self, others.into_iter(), BatchKind::Intersection, true)
+    }
+
+    /// Batched [`Sketch::intersection_fast`].
+    ///
+    /// Provided for API symmetry — results are bit-identical to calling
+    /// [`Sketch::intersection_fast`] on each pair, **but this method is not
+    /// faster than the per-pair loop**.
+    pub fn intersection_many_fast<'a, I>(&'a self, others: I) -> BatchIter<'a, I::IntoIter>
+    where
+        I: IntoIterator<Item = &'a Sketch>,
+        I::IntoIter: 'a,
+    {
+        BatchIter::new(self, others.into_iter(), BatchKind::Intersection, false)
     }
 
     /// Serialize this Sketch to the given writer
@@ -835,6 +1008,146 @@ impl Sketch {
             *r = u16::from_le_bytes(buf);
         }
         Ok(Self { regs })
+    }
+}
+
+type ADiff = [[f64; TR as usize]; TQ as usize];
+
+struct PartialStats {
+    cc: u32,
+    cn: u32,
+    right_sum: f64,
+    right_ez: u16,
+    union_sum: f64,
+    union_ez: u16,
+}
+
+#[derive(Copy, Clone)]
+enum BatchKind {
+    Similarity,
+    Intersection,
+}
+
+struct LeftCache {
+    sum: f64,
+    ez: u16,
+    n: f64,
+}
+
+/// Iterator returned by [`Sketch::similarity_many`],
+/// [`Sketch::similarity_many_fast`], [`Sketch::intersection_many`], and
+/// [`Sketch::intersection_many_fast`].
+pub struct BatchIter<'a, I: Iterator<Item = &'a Sketch>> {
+    left: &'a Sketch,
+    others: I,
+    kind: BatchKind,
+    high_precision: bool,
+    left_cache: Option<LeftCache>,
+    a_diff: Option<Box<ADiff>>,
+}
+
+impl<'a, I: Iterator<Item = &'a Sketch>> BatchIter<'a, I> {
+    fn new(left: &'a Sketch, others: I, kind: BatchKind, high_precision: bool) -> Self {
+        Self {
+            left,
+            others,
+            kind,
+            high_precision,
+            left_cache: None,
+            a_diff: None,
+        }
+    }
+}
+
+impl<'a, I: Iterator<Item = &'a Sketch>> Iterator for BatchIter<'a, I> {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<f64> {
+        let other = self.others.next()?;
+
+        // The batch path only materially wins when a pair hits the slow
+        // exp-loop branch of `approximate_expected_collisions` — that's where
+        // the ~131K `exp()` hoist lives. For fast-path calls (no `ec`
+        // correction) and for pairs that clearly land in the closed-form
+        // branch, the pairwise methods are already tightly optimized.
+        // Delegate to them and skip the cache init entirely. This keeps
+        // `_fast` variants and large-sketch `_many` calls close to per-pair
+        // performance.
+        if !self.high_precision {
+            return Some(match self.kind {
+                BatchKind::Similarity => self.left.similarity_fast(other),
+                BatchKind::Intersection => self.left.intersection_fast(other),
+            });
+        }
+
+        let cache = self.left_cache.get_or_insert_with(|| {
+            let (sum, ez) = self.left.sum_and_zeros();
+            let n = Sketch::cardinality_from_parts(sum, ez);
+            LeftCache { sum, ez, n }
+        });
+
+        if self.left == other {
+            return Some(match self.kind {
+                BatchKind::Similarity => 1.0,
+                BatchKind::Intersection => Sketch::cardinality_from_parts(cache.sum, cache.ez),
+            });
+        }
+
+        // If self is already above the slow-path threshold, every pair will
+        // take the closed-form branch — no amortization to extract.
+        let slow_thresh = 2f64.powf(f64::from(P) + 5.0);
+        if cache.n > slow_thresh {
+            return Some(match self.kind {
+                BatchKind::Similarity => self.left.similarity(other),
+                BatchKind::Intersection => self.left.intersection(other),
+            });
+        }
+
+        let stats = self.left.right_and_union_stats(other);
+
+        if stats.cc == 0 {
+            return Some(0.0);
+        }
+
+        let ec = if self.high_precision {
+            let n = cache.n;
+            let m = Sketch::cardinality_from_parts(stats.right_sum, stats.right_ez);
+
+            // Does this pair land in the slow exp-loop branch of
+            // `approximate_expected_collisions`? If not, we can skip the
+            // `a_diff` precomputation entirely.
+            let big = n.max(m);
+            let cap = 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R));
+            let slow_thresh = 2f64.powf(f64::from(P) + 5.0);
+
+            if big <= cap && big <= slow_thresh {
+                let a_diff = self
+                    .a_diff
+                    .get_or_insert_with(|| Sketch::precompute_a_diff(n));
+                Sketch::approximate_expected_collisions_with_a_diff(a_diff, n, m)
+            } else {
+                Sketch::approximate_expected_collisions(n, m)
+            }
+        } else {
+            0.0
+        };
+
+        if (stats.cc as f64) < ec {
+            return Some(0.0);
+        }
+
+        let similarity = (stats.cc as f64 - ec) / stats.cn as f64;
+        Some(match self.kind {
+            BatchKind::Similarity => similarity,
+            BatchKind::Intersection => {
+                let union_card = Sketch::cardinality_from_parts(stats.union_sum, stats.union_ez);
+                similarity * union_card
+            }
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.others.size_hint()
     }
 }
 
