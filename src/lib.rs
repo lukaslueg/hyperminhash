@@ -87,6 +87,16 @@ const TR: u32 = 1 << R;
 const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
+const TABLE_ROWS: usize = TQ as usize;
+const TABLE_COLUMNS: usize = TR as usize;
+type TableRow = [f64; TABLE_COLUMNS];
+type TableRows = [TableRow; TABLE_ROWS];
+
+fn zeroed_table_rows() -> Box<TableRows> {
+    let rows = vec![[0.0; TABLE_COLUMNS]; TABLE_ROWS].into_boxed_slice();
+    rows.try_into()
+        .unwrap_or_else(|_| unreachable!("collision table has a fixed row count"))
+}
 
 // Lookup table of 2^-i for i in 0..64, used to accumulate register contributions
 // during cardinality / similarity estimation. Built at compile time via
@@ -121,14 +131,14 @@ fn beta(ez: u16) -> f64 {
 static TBL: std::sync::LazyLock<EcTable> = std::sync::LazyLock::new(EcTable::new);
 
 struct EcTable {
-    ln1p_neg_b1: Box<[[f64; TR as usize]; TQ as usize]>,
-    ln1p_neg_b2: Box<[[f64; TR as usize]; TQ as usize]>,
+    ln1p_neg_b1: Box<TableRows>,
+    ln1p_neg_b2: Box<TableRows>,
 }
 
 impl EcTable {
     fn new() -> Self {
-        let mut ln1p_neg_b1 = Box::new([[0.0; TR as usize]; TQ as usize]);
-        let mut ln1p_neg_b2 = Box::new([[0.0; TR as usize]; TQ as usize]);
+        let mut ln1p_neg_b1 = zeroed_table_rows();
+        let mut ln1p_neg_b2 = zeroed_table_rows();
 
         // Store the inclusive i in 1..=TQ and j in 1..=TR ranges using
         // zero-based row/column indexes.
@@ -774,8 +784,11 @@ impl Sketch {
     // cell of the `EcTable`. Bit-identical to the `a1 - a0` subexpression in
     // `expected_collisions`. Cost: ~131K `exp()` calls, 512 KB heap.
     fn precompute_a_diff(n: f64) -> Box<ADiff> {
-        let tbl = &*TBL;
-        let mut out: Box<ADiff> = Box::new([[0.0; TR as usize]; TQ as usize]);
+        Self::precompute_a_diff_from_table(&TBL, n)
+    }
+
+    fn precompute_a_diff_from_table(tbl: &EcTable, n: f64) -> Box<ADiff> {
+        let mut out = zeroed_table_rows();
         for i in 1..=TQ {
             let row = (i as usize) - 1;
             let l1 = &tbl.ln1p_neg_b1[row];
@@ -1144,7 +1157,7 @@ impl Sketch {
     }
 }
 
-type ADiff = [[f64; TR as usize]; TQ as usize];
+type ADiff = TableRows;
 
 struct PartialStats {
     cc: u32,
@@ -1530,6 +1543,86 @@ mod tests {
             let value = Sketch::approximate_expected_collisions(n, THRESHOLD / 3.0);
             assert_eq!(value.to_bits(), expected, "n={:#018x}", n.to_bits());
         }
+    }
+
+    #[test]
+    fn heap_built_collision_storage_matches_fixed_array_builder() {
+        type FixedTable = [[f64; TABLE_COLUMNS]; TABLE_ROWS];
+
+        #[inline(never)]
+        fn previous_table_part(second_endpoint: bool) -> Box<FixedTable> {
+            let mut out = Box::new([[0.0; TABLE_COLUMNS]; TABLE_ROWS]);
+            for i in 1..=TQ {
+                let row = (i as usize) - 1;
+                if i != TQ {
+                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
+                    for j1 in 1..=TR {
+                        let col = (j1 as usize) - 1;
+                        let endpoint = f64::from(TR) + f64::from(j1) + f64::from(second_endpoint);
+                        out[row][col] = f64::ln_1p(-(endpoint / den));
+                    }
+                } else {
+                    let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
+                    for j1 in 1..=TR {
+                        let col = (j1 as usize) - 1;
+                        let endpoint = f64::from(j1) + f64::from(second_endpoint);
+                        out[row][col] = f64::ln_1p(-(endpoint / den));
+                    }
+                }
+            }
+            out
+        }
+
+        #[inline(never)]
+        fn previous_a_diff(tbl: &EcTable, n: f64) -> Box<FixedTable> {
+            let mut out = Box::new([[0.0; TABLE_COLUMNS]; TABLE_ROWS]);
+            for i in 1..=TQ {
+                let row = (i as usize) - 1;
+                let l1 = &tbl.ln1p_neg_b1[row];
+                let l2 = &tbl.ln1p_neg_b2[row];
+                for j1 in 1..=TR {
+                    let col = (j1 as usize) - 1;
+                    let a1 = (n * l2[col]).exp();
+                    let a0 = (n * l1[col]).exp();
+                    out[row][col] = a1 - a0;
+                }
+            }
+            out
+        }
+
+        fn assert_table_bits(left: &TableRows, right: &FixedTable) {
+            assert_eq!(left.len(), TABLE_ROWS);
+            for row in 0..TABLE_ROWS {
+                for col in 0..TABLE_COLUMNS {
+                    assert_eq!(left[row][col].to_bits(), right[row][col].to_bits());
+                }
+            }
+        }
+
+        let table = EcTable::new();
+        assert_table_bits(&table.ln1p_neg_b1, &previous_table_part(false));
+        assert_table_bits(&table.ln1p_neg_b2, &previous_table_part(true));
+
+        let n = 12_345.0;
+        let actual_a_diff = Sketch::precompute_a_diff_from_table(&table, n);
+        assert_table_bits(&actual_a_diff, &previous_a_diff(&table, n));
+    }
+
+    #[test]
+    fn collision_storage_builds_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let table = EcTable::new();
+                assert_eq!(table.ln1p_neg_b1.len(), TABLE_ROWS);
+                assert_eq!(table.ln1p_neg_b2.len(), TABLE_ROWS);
+
+                let a_diff = Sketch::precompute_a_diff_from_table(&table, 12_345.0);
+                assert_eq!(a_diff.len(), TABLE_ROWS);
+            })
+            .expect("small-stack test thread should start")
+            .join()
+            .expect("collision storage should build on a 64 KiB stack");
     }
 
     #[test]
