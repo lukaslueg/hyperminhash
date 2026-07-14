@@ -127,6 +127,47 @@ fn bench_similarity(c: &mut criterion::Criterion) {
     group.finish();
 }
 
+fn bench_disjoint_similarity(c: &mut criterion::Criterion) {
+    fn sketch_with_registers(start: usize, count: usize, value: u16) -> hyperminhash::Sketch {
+        const REGISTERS: usize = 1 << 14;
+        let mut bytes = vec![0; REGISTERS * size_of::<u16>()];
+        for register in bytes
+            .chunks_exact_mut(size_of::<u16>())
+            .skip(start)
+            .take(count)
+        {
+            register.copy_from_slice(&value.to_le_bytes());
+        }
+        hyperminhash::Sketch::load(bytes.as_slice()).expect("valid in-memory sketch")
+    }
+
+    let cases = [
+        (
+            "one/one",
+            sketch_with_registers(0, 1, 1 << 10),
+            sketch_with_registers(1, 1, 1 << 10),
+        ),
+        (
+            "balanced",
+            sketch_with_registers(0, 1_000, 1 << 10),
+            sketch_with_registers(1_000, 1_000, 1 << 10),
+        ),
+        (
+            "asymmetric",
+            sketch_with_registers(0, 100, 1 << 10),
+            sketch_with_registers(100, 8_000, 1 << 10),
+        ),
+    ];
+
+    let mut group = c.benchmark_group("Determine disjoint similarity index");
+    for (name, left, right) in &cases {
+        group.bench_function(*name, |b| {
+            b.iter(|| black_box(left).similarity(black_box(right)))
+        });
+    }
+    group.finish();
+}
+
 fn bench_similarity_many(c: &mut criterion::Criterion) {
     let mut group = c.benchmark_group("Batch similarity");
 
@@ -261,6 +302,7 @@ criterion::criterion_group!(
     bench_cardinality,
     bench_union,
     bench_similarity,
+    bench_disjoint_similarity,
     bench_similarity_many,
     bench_unique_integers,
     bench_add,

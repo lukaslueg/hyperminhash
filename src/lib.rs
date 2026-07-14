@@ -922,28 +922,37 @@ impl Sketch {
     }
 
     fn similarity_impl(&self, other: &Self, high_precision: bool) -> f64 {
-        let (cc, cn, ec) = if high_precision {
-            let stats = self.similarity_stats(other);
-            let n = Self::cardinality_from_parts(stats.left_sum, stats.left_ez);
-            let m = Self::cardinality_from_parts(stats.right_sum, stats.right_ez);
-            (
-                stats.cc,
-                stats.cn,
-                Self::approximate_expected_collisions(n, m),
-            )
-        } else {
-            let (cc, cn) = self.overlap_counts(other);
-            (cc, cn, 0.0)
-        };
+        if high_precision {
+            return Self::high_precision_similarity_from_stats(
+                self.similarity_stats(other),
+                Self::approximate_expected_collisions,
+            );
+        }
+
+        let (cc, cn) = self.overlap_counts(other);
 
         if cc == 0 {
             return 0.0;
         }
 
-        if (cc as f64) < ec {
+        cc as f64 / cn as f64
+    }
+
+    fn high_precision_similarity_from_stats(
+        stats: SimilarityStats,
+        expected_collisions: impl FnOnce(f64, f64) -> f64,
+    ) -> f64 {
+        if stats.cc == 0 {
             return 0.0;
         }
-        (cc as f64 - ec) / cn as f64
+
+        let n = Self::cardinality_from_parts(stats.left_sum, stats.left_ez);
+        let m = Self::cardinality_from_parts(stats.right_sum, stats.right_ez);
+        let ec = expected_collisions(n, m);
+        if (stats.cc as f64) < ec {
+            return 0.0;
+        }
+        (stats.cc as f64 - ec) / stats.cn as f64
     }
 
     /// The Jaccard Index similarity estimation
@@ -1373,6 +1382,46 @@ mod tests {
         let sk2: Sketch = (1_000..2_000).collect();
         assert_eq!(sk1.similarity(&sk2), 0.0);
         assert_eq!(sk1.intersection(&sk2), 0.0);
+    }
+
+    #[test]
+    fn zero_overlap_skips_collision_correction() {
+        fn sketch_with_registers(start: usize, count: usize) -> Sketch {
+            let mut sketch = Sketch::new();
+            sketch.regs[start..start + count].fill(1 << R);
+            sketch
+        }
+
+        fn previous_similarity(left: &Sketch, right: &Sketch) -> f64 {
+            let stats = left.similarity_stats(right);
+            let n = Sketch::cardinality_from_parts(stats.left_sum, stats.left_ez);
+            let m = Sketch::cardinality_from_parts(stats.right_sum, stats.right_ez);
+            let ec = Sketch::approximate_expected_collisions(n, m);
+
+            if stats.cc == 0 || (stats.cc as f64) < ec {
+                0.0
+            } else {
+                (stats.cc as f64 - ec) / stats.cn as f64
+            }
+        }
+
+        for (left_count, right_count) in [(0, 1), (1, 1), (17, 63), (100, 8_000), (8_192, 8_192)] {
+            let left = sketch_with_registers(0, left_count);
+            let right = sketch_with_registers(left_count, right_count);
+            for (a, b) in [(&left, &right), (&right, &left)] {
+                let stats = a.similarity_stats(b);
+                assert_eq!(stats.cc, 0);
+
+                let correction_was_evaluated = std::cell::Cell::new(false);
+                let actual = Sketch::high_precision_similarity_from_stats(stats, |_, _| {
+                    correction_was_evaluated.set(true);
+                    f64::NAN
+                });
+                assert!(!correction_was_evaluated.get());
+                assert_eq!(actual.to_bits(), previous_similarity(a, b).to_bits());
+                assert_eq!(a.similarity(b).to_bits(), actual.to_bits());
+            }
+        }
     }
 
     #[test]
