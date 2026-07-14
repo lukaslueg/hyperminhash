@@ -2,7 +2,10 @@ use std::hint::black_box;
 
 fn bench_new(c: &mut criterion::Criterion) {
     c.bench_function("Construct new sketch", |b| {
-        b.iter(|| black_box(hyperminhash::Sketch::default()))
+        b.iter(|| {
+            let sk = hyperminhash::Sketch::default();
+            black_box(&sk);
+        })
     });
 }
 
@@ -16,7 +19,15 @@ fn bench_add(c: &mut criterion::Criterion) {
         group.bench_with_input(
             criterion::BenchmarkId::new("Add hashable object", i),
             &i,
-            |b, i| b.iter(|| black_box((0..*i).collect::<hyperminhash::Sketch>())),
+            |b, i| {
+                b.iter(|| {
+                    let mut sk = hyperminhash::Sketch::default();
+                    for value in 0..*black_box(i) {
+                        sk.add(value);
+                    }
+                    black_box(&sk);
+                })
+            },
         );
     }
     group.finish();
@@ -34,7 +45,7 @@ fn bench_bytes(c: &mut criterion::Criterion) {
         group.bench_with_input(
             criterion::BenchmarkId::new("Add hashable object", i),
             &i,
-            |b, _| b.iter(|| black_box(sk.add_bytes(black_box(&buf)))),
+            |b, _| b.iter(|| sk.add_bytes(black_box(&buf))),
         );
     }
     group.finish();
@@ -45,7 +56,7 @@ fn bench_cardinality(c: &mut criterion::Criterion) {
     let mut b = |max: u64, name: &str| {
         group.throughput(criterion::Throughput::Elements(max));
         let sk = (0..max).collect::<hyperminhash::Sketch>();
-        group.bench_function(name, |b| b.iter(|| black_box(sk.cardinality())));
+        group.bench_function(name, |b| b.iter(|| black_box(&sk).cardinality()));
     };
     b(0, "Empty");
     b(100, "Mostly empty");
@@ -59,19 +70,19 @@ fn bench_similarity(c: &mut criterion::Criterion) {
     let small_a = (0..100).collect::<hyperminhash::Sketch>();
     let small_b = (50..150).collect::<hyperminhash::Sketch>();
     group.bench_function("small/high-precision", |b| {
-        b.iter(|| black_box(small_a.similarity(&small_b)))
+        b.iter(|| black_box(&small_a).similarity(black_box(&small_b)))
     });
     group.bench_function("small/fast", |b| {
-        b.iter(|| black_box(small_a.similarity_fast(&small_b)))
+        b.iter(|| black_box(&small_a).similarity_fast(black_box(&small_b)))
     });
 
     let large_a = (0..1_000_000).collect::<hyperminhash::Sketch>();
     let large_b = (500_000..1_500_000).collect::<hyperminhash::Sketch>();
     group.bench_function("large/high-precision", |b| {
-        b.iter(|| black_box(large_a.similarity(&large_b)))
+        b.iter(|| black_box(&large_a).similarity(black_box(&large_b)))
     });
     group.bench_function("large/fast", |b| {
-        b.iter(|| black_box(large_a.similarity_fast(&large_b)))
+        b.iter(|| black_box(&large_a).similarity_fast(black_box(&large_b)))
     });
 
     group.finish();
