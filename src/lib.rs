@@ -546,10 +546,8 @@ impl Sketch {
     /// assert_eq!(sk1, (1..=4).collect::<hyperminhash::Sketch>());
     /// ```
     pub fn union<'a>(&'a mut self, other: &Self) -> &'a Self {
-        for (r, rr) in self.regs.iter_mut().zip(other.regs.iter()) {
-            if *r < *rr {
-                *r = *rr;
-            }
+        for (left, right) in self.regs.iter_mut().zip(other.regs.iter()) {
+            *left = (*left).max(*right);
         }
         self
     }
@@ -1306,5 +1304,19 @@ mod tests {
         assert_eq!(e2.hasher.digest128(), HASH_AA);
 
         assert_eq!(e, e2);
+    }
+
+    #[test]
+    fn collision_correction_threshold_regression() {
+        const THRESHOLD: f64 = 524_288.0;
+        let cases = [
+            (THRESHOLD.next_down(), 0x3f21_4970_80c5_c710),
+            (THRESHOLD, 0x3f21_4970_80c5_c70c),
+            (THRESHOLD.next_up(), 0x400c_ffde_0ae6_9d62),
+        ];
+        for (n, expected) in cases {
+            let value = Sketch::approximate_expected_collisions(n, THRESHOLD / 3.0);
+            assert_eq!(value.to_bits(), expected, "n={:#018x}", n.to_bits());
+        }
     }
 }

@@ -64,6 +64,33 @@ fn bench_cardinality(c: &mut criterion::Criterion) {
     group.finish();
 }
 
+fn bench_union(c: &mut criterion::Criterion) {
+    let empty = hyperminhash::Sketch::new();
+    let filled = (0..1_000_000).collect::<hyperminhash::Sketch>();
+    let disjoint = (1_000_000..2_000_000).collect::<hyperminhash::Sketch>();
+    let overlapping = (500_000..1_500_000).collect::<hyperminhash::Sketch>();
+
+    let mut group = c.benchmark_group("Union sketches");
+    for (name, left, right) in [
+        ("empty/filled", &empty, &filled),
+        ("identical", &filled, &filled),
+        ("disjoint", &filled, &disjoint),
+        ("overlapping", &filled, &overlapping),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_batched_ref(
+                || left.clone(),
+                |work| {
+                    black_box(&mut *work).union(black_box(right));
+                    black_box(&*work);
+                },
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
 fn bench_similarity(c: &mut criterion::Criterion) {
     let mut group = c.benchmark_group("Determine similarity index");
 
@@ -220,6 +247,7 @@ criterion::criterion_group!(
     benches,
     bench_new,
     bench_cardinality,
+    bench_union,
     bench_similarity,
     bench_similarity_many,
     bench_unique_integers,
