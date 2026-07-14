@@ -183,7 +183,7 @@ fn main() -> io::Result<()> {
             if let Some(sk) = sink.inspect(None, |sk1, sk2| match sk1 {
                 None => Some(sk2.clone()),
                 Some(mut sk) => {
-                    sk.union(&sk2);
+                    sk.union(sk2);
                     Some(sk)
                 }
             }) {

@@ -1,6 +1,3 @@
-use hyperminhash;
-use rand;
-
 use std::collections;
 
 fn main() {

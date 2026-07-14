@@ -3,13 +3,13 @@ use std::{env, fs, process, thread, time};
 
 fn fmt_bytes(s: u64) -> String {
     if s > 1024 * 1024 * 1024 {
-        return format!("{:.2} GB", s as f32 / 1024.0 / 1024.0 / 1024.0);
+        format!("{:.2} GB", s as f32 / 1024.0 / 1024.0 / 1024.0)
     } else if s > 1024 * 1024 {
-        return format!("{:.2} MB", s as f32 / 1024.0 / 1024.0);
+        format!("{:.2} MB", s as f32 / 1024.0 / 1024.0)
     } else if s > 1024 {
-        return format!("{:.2} KB", s as f32 / 1024.0);
+        format!("{:.2} KB", s as f32 / 1024.0)
     } else {
-        return format!("{} bytes", s);
+        format!("{} bytes", s)
     }
 }
 
@@ -31,7 +31,7 @@ fn main() {
                         sk.resize(root_idx + 1, Default::default());
                     }
                     sk[root_idx].1 += 1;
-                    let f = match fs::File::open(&entry.path()) {
+                    let f = match fs::File::open(entry.path()) {
                         Ok(f) => f,
                         Err(e) => {
                             eprintln!("Failed to open file: `{:?}`", e);
@@ -90,7 +90,7 @@ fn main() {
         workers_res.iter().flat_map(|w| w.get(root_idx)).fold(
             (Box::new(hyperminhash::Sketch::default()), 0, 0),
             |(mut sk, total_count, total_size), (sk2, count, size)| {
-                sk.union(&sk2);
+                sk.union(sk2);
                 (sk, total_count + count, total_size + size)
             },
         )
