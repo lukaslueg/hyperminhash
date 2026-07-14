@@ -87,6 +87,8 @@ const TR: u32 = 1 << R;
 const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
+const IS_EMPTY_CHUNK_REGISTERS: usize = 16;
+const _: () = assert!((M as usize).is_multiple_of(IS_EMPTY_CHUNK_REGISTERS));
 
 /// The exact size, in bytes, of a serialized [`Sketch`].
 ///
@@ -387,7 +389,15 @@ impl Sketch {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.regs.iter().all(|r| *r == 0)
+        self.regs
+            .chunks_exact(IS_EMPTY_CHUNK_REGISTERS)
+            .all(|chunk| {
+                chunk
+                    .iter()
+                    .copied()
+                    .fold(0, |combined, register| combined | register)
+                    == 0
+            })
     }
 
     fn new_reg(lz: u8, sig: u16) -> u16 {
@@ -1395,6 +1405,24 @@ mod tests {
         sk.add(0);
         assert!(!sk.is_empty());
         assert_ne!(sk.cardinality(), 0.0);
+    }
+
+    #[test]
+    fn is_empty_detects_each_position_within_a_chunk() {
+        let last_chunk = M as usize - IS_EMPTY_CHUNK_REGISTERS;
+        for chunk_start in [0, M as usize / 2, last_chunk] {
+            for offset in 0..IS_EMPTY_CHUNK_REGISTERS {
+                for value in [1, u16::MAX] {
+                    let mut sketch = Sketch::new();
+                    sketch.regs[chunk_start + offset] = value;
+                    assert!(
+                        !sketch.is_empty(),
+                        "missed value {value} at register {}",
+                        chunk_start + offset
+                    );
+                }
+            }
+        }
     }
 
     #[test]

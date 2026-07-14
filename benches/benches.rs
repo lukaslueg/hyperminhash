@@ -64,6 +64,29 @@ fn bench_cardinality(c: &mut criterion::Criterion) {
     group.finish();
 }
 
+fn bench_is_empty(c: &mut criterion::Criterion) {
+    fn sketch_with_nonzero_register(index: usize) -> hyperminhash::Sketch {
+        let mut bytes = vec![0; hyperminhash::SERIALIZED_SIZE];
+        let offset = index * size_of::<u16>();
+        bytes[offset..offset + size_of::<u16>()].copy_from_slice(&1u16.to_le_bytes());
+        hyperminhash::Sketch::load(bytes.as_slice()).expect("valid in-memory sketch")
+    }
+
+    let empty = hyperminhash::Sketch::new();
+    let first = sketch_with_nonzero_register(0);
+    let last = sketch_with_nonzero_register(hyperminhash::SERIALIZED_SIZE / size_of::<u16>() - 1);
+
+    let mut group = c.benchmark_group("Check whether sketch is empty");
+    for (name, sketch) in [
+        ("empty", &empty),
+        ("first register nonzero", &first),
+        ("last register nonzero", &last),
+    ] {
+        group.bench_function(name, |b| b.iter(|| black_box(black_box(sketch).is_empty())));
+    }
+    group.finish();
+}
+
 fn bench_union(c: &mut criterion::Criterion) {
     let empty = hyperminhash::Sketch::new();
     let filled = (0..1_000_000).collect::<hyperminhash::Sketch>();
@@ -300,6 +323,7 @@ criterion::criterion_group!(
     benches,
     bench_new,
     bench_cardinality,
+    bench_is_empty,
     bench_union,
     bench_similarity,
     bench_disjoint_similarity,
