@@ -1,6 +1,9 @@
 #[test]
 fn deserialize_is_stable() {
+    let serialized = include_bytes!("serialized.bin");
+    assert_eq!(serialized.len(), hyperminhash::SERIALIZED_SIZE);
+
     // Ensure that a Sketch serialized once yields the same result forever...
-    let sk = hyperminhash::Sketch::load(&include_bytes!("serialized.bin")[..]).unwrap();
-    assert_eq!(sk.cardinality(), 9931.106244547593);
+    let sketch = hyperminhash::Sketch::load(&serialized[..]).unwrap();
+    assert_eq!(sketch.cardinality(), 9931.106244547593);
 }

@@ -87,6 +87,14 @@ const TR: u32 = 1 << R;
 const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
+
+/// The exact size, in bytes, of a serialized [`Sketch`].
+///
+/// This is also a useful advisory capacity when constructing a
+/// [`std::io::BufReader`] or [`std::io::BufWriter`] for sketch I/O. Buffering
+/// remains correct with any capacity; callers should choose a different size
+/// when that better suits their workload.
+pub const SERIALIZED_SIZE: usize = (M as usize) * std::mem::size_of::<u16>();
 const TABLE_ROWS: usize = TQ as usize;
 const TABLE_INTERVALS: usize = TR as usize;
 const TABLE_BOUNDARIES: usize = TABLE_INTERVALS + 1;
@@ -1127,11 +1135,23 @@ impl Sketch {
     /// # Errors
     /// Returns I/O errors that occured while writing
     ///
-    /// ```rust
-    /// let sk: hyperminhash::Sketch = (0..100).collect();
+    /// Writers that perform expensive I/O, such as files, should normally be
+    /// wrapped in [`std::io::BufWriter`]. [`SERIALIZED_SIZE`] is an advisory
+    /// capacity: other capacities work correctly as well. Explicitly flush
+    /// the buffer so that any deferred I/O error is reported.
     ///
-    /// let mut buffer = Vec::new();
-    /// sk.save(&mut buffer).expect("Failed to write");
+    /// ```no_run
+    /// use std::fs::File;
+    /// use std::io::{BufWriter, Write};
+    ///
+    /// use hyperminhash::{SERIALIZED_SIZE, Sketch};
+    ///
+    /// let sketch: Sketch = (0..100).collect();
+    /// let file = File::create("sketch.bin")?;
+    /// let mut writer = BufWriter::with_capacity(SERIALIZED_SIZE, file);
+    /// sketch.save(&mut writer)?;
+    /// writer.flush()?;
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn save(&self, mut writer: impl std::io::Write) -> std::io::Result<()> {
         for r in self.regs {
@@ -1145,11 +1165,21 @@ impl Sketch {
     /// # Errors
     /// Returns I/O errors that occured while reading
     ///
-    /// ```rust
-    /// let reader = std::io::repeat(0);
+    /// Readers that perform expensive I/O, such as files, should normally be
+    /// wrapped in [`std::io::BufReader`]. [`SERIALIZED_SIZE`] is an advisory
+    /// capacity: other capacities work correctly as well.
     ///
-    /// let sk = hyperminhash::Sketch::load(reader).expect("Failed to load");
-    /// assert!(sk.is_empty());
+    /// ```no_run
+    /// use std::fs::File;
+    /// use std::io::BufReader;
+    ///
+    /// use hyperminhash::{SERIALIZED_SIZE, Sketch};
+    ///
+    /// let file = File::open("sketch.bin")?;
+    /// let mut reader = BufReader::with_capacity(SERIALIZED_SIZE, file);
+    /// let sketch = Sketch::load(&mut reader)?;
+    /// # assert!(!sketch.is_empty());
+    /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn load(mut reader: impl std::io::Read) -> std::io::Result<Self> {
         let mut regs = [0; M as usize];
