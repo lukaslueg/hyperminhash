@@ -88,12 +88,21 @@ const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
 const TABLE_ROWS: usize = TQ as usize;
-const TABLE_COLUMNS: usize = TR as usize;
-type TableRow = [f64; TABLE_COLUMNS];
+const TABLE_INTERVALS: usize = TR as usize;
+const TABLE_BOUNDARIES: usize = TABLE_INTERVALS + 1;
+type TableRow = [f64; TABLE_INTERVALS];
 type TableRows = [TableRow; TABLE_ROWS];
+type BoundaryRow = [f64; TABLE_BOUNDARIES];
+type BoundaryRows = [BoundaryRow; TABLE_ROWS];
 
 fn zeroed_table_rows() -> Box<TableRows> {
-    let rows = vec![[0.0; TABLE_COLUMNS]; TABLE_ROWS].into_boxed_slice();
+    let rows = vec![[0.0; TABLE_INTERVALS]; TABLE_ROWS].into_boxed_slice();
+    rows.try_into()
+        .unwrap_or_else(|_| unreachable!("collision table has a fixed row count"))
+}
+
+fn zeroed_boundary_rows() -> Box<BoundaryRows> {
+    let rows = vec![[0.0; TABLE_BOUNDARIES]; TABLE_ROWS].into_boxed_slice();
     rows.try_into()
         .unwrap_or_else(|_| unreachable!("collision table has a fixed row count"))
 }
@@ -131,45 +140,40 @@ fn beta(ez: u16) -> f64 {
 static TBL: std::sync::LazyLock<EcTable> = std::sync::LazyLock::new(EcTable::new);
 
 struct EcTable {
-    ln1p_neg_b1: Box<TableRows>,
-    ln1p_neg_b2: Box<TableRows>,
+    ln1p_neg_boundaries: Box<BoundaryRows>,
 }
 
 impl EcTable {
     fn new() -> Self {
-        let mut ln1p_neg_b1 = zeroed_table_rows();
-        let mut ln1p_neg_b2 = zeroed_table_rows();
+        let mut ln1p_neg_boundaries = zeroed_boundary_rows();
 
-        // Store the inclusive i in 1..=TQ and j in 1..=TR ranges using
-        // zero-based row/column indexes.
+        // Interval `col` uses boundaries `col` and `col + 1`. For every
+        // interior boundary, the old representation's `b2[col]` and
+        // `b1[col + 1]` were calculated from the same exactly representable
+        // integer numerator and the same denominator, so they are
+        // bit-identical. Tests retain the old two-endpoint builder as an
+        // oracle for every boundary.
         for i in 1..=TQ {
             let row = (i as usize) - 1;
             if i != TQ {
                 let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
-                for j1 in 1..=TR {
-                    let col = (j1 as usize) - 1;
-                    let j = f64::from(j1);
-                    let b1 = (f64::from(TR) + j) / den;
-                    let b2 = (f64::from(TR) + j + 1.0) / den;
-                    ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
-                    ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
+                for boundary in 0..=TR {
+                    let j = f64::from(boundary + 1);
+                    let b = (f64::from(TR) + j) / den;
+                    ln1p_neg_boundaries[row][boundary as usize] = f64::ln_1p(-b);
                 }
             } else {
                 let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
-                for j1 in 1..=TR {
-                    let col = (j1 as usize) - 1;
-                    let j = f64::from(j1);
-                    let b1 = j / den;
-                    let b2 = (j + 1.0) / den;
-                    ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
-                    ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
+                for boundary in 0..=TR {
+                    let j = f64::from(boundary + 1);
+                    let b = j / den;
+                    ln1p_neg_boundaries[row][boundary as usize] = f64::ln_1p(-b);
                 }
             }
         }
 
         EcTable {
-            ln1p_neg_b1,
-            ln1p_neg_b2,
+            ln1p_neg_boundaries,
         }
     }
 }
@@ -763,17 +767,18 @@ impl Sketch {
         let mut x = 0.0;
         for i in 1..=TQ {
             let row = (i as usize) - 1;
-            let l1 = &tbl.ln1p_neg_b1[row];
-            let l2 = &tbl.ln1p_neg_b2[row];
+            let boundaries = &tbl.ln1p_neg_boundaries[row];
+            let mut a0 = (n * boundaries[0]).exp();
+            let mut b0 = (m * boundaries[0]).exp();
 
             for j1 in 1..=TR {
                 let col = (j1 as usize) - 1;
                 // (1 - b)^n = exp(n * ln1p(-b))
-                let a1 = (n * l2[col]).exp();
-                let a0 = (n * l1[col]).exp();
-                let b1 = (m * l2[col]).exp();
-                let b0 = (m * l1[col]).exp();
+                let a1 = (n * boundaries[col + 1]).exp();
+                let b1 = (m * boundaries[col + 1]).exp();
                 x += (a1 - a0) * (b1 - b0);
+                a0 = a1;
+                b0 = b1;
             }
         }
 
@@ -791,14 +796,14 @@ impl Sketch {
         let mut out = zeroed_table_rows();
         for i in 1..=TQ {
             let row = (i as usize) - 1;
-            let l1 = &tbl.ln1p_neg_b1[row];
-            let l2 = &tbl.ln1p_neg_b2[row];
+            let boundaries = &tbl.ln1p_neg_boundaries[row];
             let o = &mut out[row];
+            let mut a0 = (n * boundaries[0]).exp();
             for j1 in 1..=TR {
                 let col = (j1 as usize) - 1;
-                let a1 = (n * l2[col]).exp();
-                let a0 = (n * l1[col]).exp();
+                let a1 = (n * boundaries[col + 1]).exp();
                 o[col] = a1 - a0;
+                a0 = a1;
             }
         }
         out
@@ -815,14 +820,14 @@ impl Sketch {
         let mut x = 0.0;
         for i in 1..=TQ {
             let row = (i as usize) - 1;
-            let l1 = &tbl.ln1p_neg_b1[row];
-            let l2 = &tbl.ln1p_neg_b2[row];
+            let boundaries = &tbl.ln1p_neg_boundaries[row];
             let ad = &a_diff[row];
+            let mut b0 = (m * boundaries[0]).exp();
             for j1 in 1..=TR {
                 let col = (j1 as usize) - 1;
-                let b1 = (m * l2[col]).exp();
-                let b0 = (m * l1[col]).exp();
+                let b1 = (m * boundaries[col + 1]).exp();
                 x += ad[col] * (b1 - b0);
+                b0 = b1;
             }
         }
         x * f64::from(P)
@@ -1546,36 +1551,47 @@ mod tests {
     }
 
     #[test]
-    fn heap_built_collision_storage_matches_fixed_array_builder() {
-        type FixedTable = [[f64; TABLE_COLUMNS]; TABLE_ROWS];
+    fn collision_boundaries_match_previous_implementation_bit_for_bit() {
+        struct PreviousEcTable {
+            ln1p_neg_b1: Box<TableRows>,
+            ln1p_neg_b2: Box<TableRows>,
+        }
 
-        #[inline(never)]
-        fn previous_table_part(second_endpoint: bool) -> Box<FixedTable> {
-            let mut out = Box::new([[0.0; TABLE_COLUMNS]; TABLE_ROWS]);
+        fn previous_table() -> PreviousEcTable {
+            let mut ln1p_neg_b1 = zeroed_table_rows();
+            let mut ln1p_neg_b2 = zeroed_table_rows();
             for i in 1..=TQ {
                 let row = (i as usize) - 1;
                 if i != TQ {
                     let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i));
                     for j1 in 1..=TR {
                         let col = (j1 as usize) - 1;
-                        let endpoint = f64::from(TR) + f64::from(j1) + f64::from(second_endpoint);
-                        out[row][col] = f64::ln_1p(-(endpoint / den));
+                        let j = f64::from(j1);
+                        let b1 = (f64::from(TR) + j) / den;
+                        let b2 = (f64::from(TR) + j + 1.0) / den;
+                        ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
+                        ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
                     }
                 } else {
                     let den = 2f64.powf(f64::from(P) + f64::from(R) + f64::from(i) - 1.0);
                     for j1 in 1..=TR {
                         let col = (j1 as usize) - 1;
-                        let endpoint = f64::from(j1) + f64::from(second_endpoint);
-                        out[row][col] = f64::ln_1p(-(endpoint / den));
+                        let j = f64::from(j1);
+                        let b1 = j / den;
+                        let b2 = (j + 1.0) / den;
+                        ln1p_neg_b1[row][col] = f64::ln_1p(-b1);
+                        ln1p_neg_b2[row][col] = f64::ln_1p(-b2);
                     }
                 }
             }
-            out
+            PreviousEcTable {
+                ln1p_neg_b1,
+                ln1p_neg_b2,
+            }
         }
 
-        #[inline(never)]
-        fn previous_a_diff(tbl: &EcTable, n: f64) -> Box<FixedTable> {
-            let mut out = Box::new([[0.0; TABLE_COLUMNS]; TABLE_ROWS]);
+        fn previous_a_diff(tbl: &PreviousEcTable, n: f64) -> Box<ADiff> {
+            let mut out = zeroed_table_rows();
             for i in 1..=TQ {
                 let row = (i as usize) - 1;
                 let l1 = &tbl.ln1p_neg_b1[row];
@@ -1590,22 +1606,136 @@ mod tests {
             out
         }
 
-        fn assert_table_bits(left: &TableRows, right: &FixedTable) {
-            assert_eq!(left.len(), TABLE_ROWS);
-            for row in 0..TABLE_ROWS {
-                for col in 0..TABLE_COLUMNS {
-                    assert_eq!(left[row][col].to_bits(), right[row][col].to_bits());
+        fn previous_expected_collisions(tbl: &PreviousEcTable, n: f64, m: f64) -> f64 {
+            let mut x = 0.0;
+            for i in 1..=TQ {
+                let row = (i as usize) - 1;
+                let l1 = &tbl.ln1p_neg_b1[row];
+                let l2 = &tbl.ln1p_neg_b2[row];
+                for j1 in 1..=TR {
+                    let col = (j1 as usize) - 1;
+                    let a1 = (n * l2[col]).exp();
+                    let a0 = (n * l1[col]).exp();
+                    let b1 = (m * l2[col]).exp();
+                    let b0 = (m * l1[col]).exp();
+                    x += (a1 - a0) * (b1 - b0);
                 }
+            }
+            x * f64::from(P)
+        }
+
+        fn previous_expected_collisions_with_a_diff(
+            tbl: &PreviousEcTable,
+            a_diff: &ADiff,
+            m: f64,
+        ) -> f64 {
+            let mut x = 0.0;
+            for i in 1..=TQ {
+                let row = (i as usize) - 1;
+                let l1 = &tbl.ln1p_neg_b1[row];
+                let l2 = &tbl.ln1p_neg_b2[row];
+                let ad = &a_diff[row];
+                for j1 in 1..=TR {
+                    let col = (j1 as usize) - 1;
+                    let b1 = (m * l2[col]).exp();
+                    let b0 = (m * l1[col]).exp();
+                    x += ad[col] * (b1 - b0);
+                }
+            }
+            x * f64::from(P)
+        }
+
+        fn previous_approximate_expected_collisions(tbl: &PreviousEcTable, n: f64, m: f64) -> f64 {
+            let (n, m) = (n.max(m), n.min(m));
+            if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
+                f64::INFINITY
+            } else if n > 2f64.powf(f64::from(P) + 5.0) {
+                let d = (4.0 * n / m) / ((1.0 + n) / m).powi(2);
+                C * 2f64.powf(f64::from(P) - f64::from(R)) * d
+            } else {
+                previous_expected_collisions(tbl, n, m) / f64::from(P)
             }
         }
 
         let table = EcTable::new();
-        assert_table_bits(&table.ln1p_neg_b1, &previous_table_part(false));
-        assert_table_bits(&table.ln1p_neg_b2, &previous_table_part(true));
+        let previous = previous_table();
+        for row in 0..TABLE_ROWS {
+            for col in 0..TABLE_INTERVALS {
+                assert_eq!(
+                    table.ln1p_neg_boundaries[row][col].to_bits(),
+                    previous.ln1p_neg_b1[row][col].to_bits(),
+                    "b1 mismatch at ({row}, {col})"
+                );
+                assert_eq!(
+                    table.ln1p_neg_boundaries[row][col + 1].to_bits(),
+                    previous.ln1p_neg_b2[row][col].to_bits(),
+                    "b2 mismatch at ({row}, {col})"
+                );
+            }
+        }
+
+        for n in [0.0, 1.0f64.next_down(), 12_345.0, 524_288.0] {
+            let actual = Sketch::precompute_a_diff_from_table(&table, n);
+            let expected = previous_a_diff(&previous, n);
+            for row in 0..TABLE_ROWS {
+                for col in 0..TABLE_INTERVALS {
+                    assert_eq!(
+                        actual[row][col].to_bits(),
+                        expected[row][col].to_bits(),
+                        "a_diff mismatch for n={n:?} at ({row}, {col})"
+                    );
+                }
+            }
+        }
+
+        let threshold = 2f64.powf(f64::from(P) + 5.0);
+        for (n, m) in [
+            (0.0, 0.0),
+            (0.0, 1.0),
+            (1.0f64.next_down(), 1.0f64.next_up()),
+            (100.0, 1.0),
+            (12_345.0, 6_789.0),
+            (threshold.next_down(), threshold / 3.0),
+            (threshold, threshold / 3.0),
+        ] {
+            assert_eq!(
+                Sketch::expected_collisions(n, m).to_bits(),
+                previous_expected_collisions(&previous, n, m).to_bits(),
+                "collision mismatch for ({n:?}, {m:?})"
+            );
+        }
+
+        let cap = 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R));
+        for (n, m) in [
+            (0.0, 0.0),
+            (0.0, 1.0),
+            (1.0f64.next_down(), 1.0f64.next_up()),
+            (threshold.next_down(), threshold / 3.0),
+            (threshold, threshold / 3.0),
+            (threshold.next_up(), threshold / 3.0),
+            (threshold.next_up(), 0.0),
+            (cap.next_down(), 1.0),
+            (cap, 1.0),
+            (cap.next_up(), 1.0),
+            (f64::INFINITY, 1.0),
+        ] {
+            assert_eq!(
+                Sketch::approximate_expected_collisions(n, m).to_bits(),
+                previous_approximate_expected_collisions(&previous, n, m).to_bits(),
+                "approximate collision mismatch for ({n:?}, {m:?})"
+            );
+        }
 
         let n = 12_345.0;
         let actual_a_diff = Sketch::precompute_a_diff_from_table(&table, n);
-        assert_table_bits(&actual_a_diff, &previous_a_diff(&table, n));
+        let previous_a_diff = previous_a_diff(&previous, n);
+        for m in [0.0, 1.0f64.next_down(), 6_789.0, threshold] {
+            assert_eq!(
+                Sketch::expected_collisions_with_a_diff(&actual_a_diff, m).to_bits(),
+                previous_expected_collisions_with_a_diff(&previous, &previous_a_diff, m).to_bits(),
+                "cached collision mismatch for m={m:?}"
+            );
+        }
     }
 
     #[test]
@@ -1614,8 +1744,7 @@ mod tests {
             .stack_size(64 * 1024)
             .spawn(|| {
                 let table = EcTable::new();
-                assert_eq!(table.ln1p_neg_b1.len(), TABLE_ROWS);
-                assert_eq!(table.ln1p_neg_b2.len(), TABLE_ROWS);
+                assert_eq!(table.ln1p_neg_boundaries.len(), TABLE_ROWS);
 
                 let a_diff = Sketch::precompute_a_diff_from_table(&table, 12_345.0);
                 assert_eq!(a_diff.len(), TABLE_ROWS);
