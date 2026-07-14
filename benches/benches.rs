@@ -102,6 +102,12 @@ fn bench_similarity(c: &mut criterion::Criterion) {
     group.bench_function("small/fast", |b| {
         b.iter(|| black_box(&small_a).similarity_fast(black_box(&small_b)))
     });
+    group.bench_function("small/intersection/high-precision", |b| {
+        b.iter(|| black_box(&small_a).intersection(black_box(&small_b)))
+    });
+    group.bench_function("small/intersection/fast", |b| {
+        b.iter(|| black_box(&small_a).intersection_fast(black_box(&small_b)))
+    });
 
     let large_a = (0..1_000_000).collect::<hyperminhash::Sketch>();
     let large_b = (500_000..1_500_000).collect::<hyperminhash::Sketch>();
@@ -110,6 +116,12 @@ fn bench_similarity(c: &mut criterion::Criterion) {
     });
     group.bench_function("large/fast", |b| {
         b.iter(|| black_box(&large_a).similarity_fast(black_box(&large_b)))
+    });
+    group.bench_function("large/intersection/high-precision", |b| {
+        b.iter(|| black_box(&large_a).intersection(black_box(&large_b)))
+    });
+    group.bench_function("large/intersection/fast", |b| {
+        b.iter(|| black_box(&large_a).intersection_fast(black_box(&large_b)))
     });
 
     group.finish();

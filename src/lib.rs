@@ -648,6 +648,93 @@ impl Sketch {
         }
     }
 
+    // Similarity does not need the union cardinality accumulated by
+    // `comparison_stats`. Keep the same lane count and per-lane addition
+    // order for the left/right sums so numerical results remain bit-identical.
+    fn similarity_stats(&self, other: &Self) -> SimilarityStats {
+        const LANES: usize = 8;
+
+        let mut left_sums = [0.0f64; LANES];
+        let mut right_sums = [0.0f64; LANES];
+        let mut left_ez_lanes = [0u16; LANES];
+        let mut right_ez_lanes = [0u16; LANES];
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            let mut left_lz = [0u8; LANES];
+            let mut right_lz = [0u8; LANES];
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                left_lz[i] = Self::lz(l);
+                right_lz[i] = Self::lz(r);
+                left_ez_lanes[i] += u16::from(l < (1u16 << R));
+                right_ez_lanes[i] += u16::from(r < (1u16 << R));
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
+            }
+
+            for i in 0..LANES {
+                left_sums[i] += L[left_lz[i] as usize];
+                right_sums[i] += L[right_lz[i] as usize];
+            }
+        }
+
+        SimilarityStats {
+            left_sum: left_sums.iter().sum(),
+            right_sum: right_sums.iter().sum(),
+            left_ez: left_ez_lanes.iter().sum(),
+            right_ez: right_ez_lanes.iter().sum(),
+            cc: cc_lanes.iter().map(|&x| u32::from(x)).sum(),
+            cn: cn_lanes.iter().map(|&x| u32::from(x)).sum(),
+        }
+    }
+
+    // Fast intersection needs the union cardinality and overlap counts, but
+    // not the separate left/right cardinalities. Preserve the union sum's
+    // lane count and per-lane addition order from `comparison_stats`.
+    fn fast_intersection_stats(&self, other: &Self) -> FastIntersectionStats {
+        const LANES: usize = 8;
+
+        let mut union_sums = [0.0f64; LANES];
+        let mut union_ez_lanes = [0u16; LANES];
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            let mut union_lz = [0u8; LANES];
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                let u = l.max(r);
+                union_lz[i] = Self::lz(u);
+                union_ez_lanes[i] += u16::from(u < (1u16 << R));
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
+            }
+
+            for i in 0..LANES {
+                union_sums[i] += L[union_lz[i] as usize];
+            }
+        }
+
+        FastIntersectionStats {
+            union_sum: union_sums.iter().sum(),
+            union_ez: union_ez_lanes.iter().sum(),
+            cc: cc_lanes.iter().map(|&x| u32::from(x)).sum(),
+            cn: cn_lanes.iter().map(|&x| u32::from(x)).sum(),
+        }
+    }
+
     fn approximate_expected_collisions(n: f64, m: f64) -> f64 {
         let (n, m) = (n.max(m), n.min(m));
         if n > 2f64.powf(2f64.powf(f64::from(Q)) + f64::from(R)) {
@@ -794,9 +881,49 @@ impl Sketch {
         }
     }
 
+    // Batch similarity already caches the left cardinality and does not need
+    // union cardinality. Preserve the right sum's lane shape from
+    // `right_and_union_stats` while omitting its unused union work.
+    #[inline(always)]
+    fn right_stats(&self, other: &Self) -> RightStats {
+        const LANES: usize = 8;
+
+        let mut right_sums = [0.0f64; LANES];
+        let mut right_ez_lanes = [0u16; LANES];
+        let mut cc_lanes = [0u16; LANES];
+        let mut cn_lanes = [0u16; LANES];
+
+        for (lc, rc) in self
+            .regs
+            .chunks_exact(LANES)
+            .zip(other.regs.chunks_exact(LANES))
+        {
+            let mut right_lz = [0u8; LANES];
+            for i in 0..LANES {
+                let l = lc[i];
+                let r = rc[i];
+                right_lz[i] = Self::lz(r);
+                right_ez_lanes[i] += u16::from(r < (1u16 << R));
+                cn_lanes[i] += u16::from((l | r) != 0);
+                cc_lanes[i] += u16::from((l == r) & (l != 0));
+            }
+
+            for i in 0..LANES {
+                right_sums[i] += L[right_lz[i] as usize];
+            }
+        }
+
+        RightStats {
+            right_sum: right_sums.iter().sum(),
+            right_ez: right_ez_lanes.iter().sum(),
+            cc: cc_lanes.iter().map(|&x| u32::from(x)).sum(),
+            cn: cn_lanes.iter().map(|&x| u32::from(x)).sum(),
+        }
+    }
+
     fn similarity_impl(&self, other: &Self, high_precision: bool) -> f64 {
         let (cc, cn, ec) = if high_precision {
-            let stats = self.comparison_stats(other);
+            let stats = self.similarity_stats(other);
             let n = Self::cardinality_from_parts(stats.left_sum, stats.left_ez);
             let m = Self::cardinality_from_parts(stats.right_sum, stats.right_ez);
             (
@@ -897,7 +1024,7 @@ impl Sketch {
         if self == other {
             return self.cardinality();
         }
-        let stats = self.comparison_stats(other);
+        let stats = self.fast_intersection_stats(other);
         if stats.cc == 0 {
             return 0.0;
         }
@@ -1019,6 +1146,13 @@ struct PartialStats {
     union_ez: u16,
 }
 
+struct RightStats {
+    cc: u32,
+    cn: u32,
+    right_sum: f64,
+    right_ez: u16,
+}
+
 #[derive(Copy, Clone)]
 enum BatchKind {
     Similarity,
@@ -1100,15 +1234,30 @@ impl<'a, I: Iterator<Item = &'a Sketch>> Iterator for BatchIter<'a, I> {
             });
         }
 
-        let stats = self.left.right_and_union_stats(other);
+        let (cc, cn, right_sum, right_ez, union_parts) = match self.kind {
+            BatchKind::Similarity => {
+                let stats = self.left.right_stats(other);
+                (stats.cc, stats.cn, stats.right_sum, stats.right_ez, None)
+            }
+            BatchKind::Intersection => {
+                let stats = self.left.right_and_union_stats(other);
+                (
+                    stats.cc,
+                    stats.cn,
+                    stats.right_sum,
+                    stats.right_ez,
+                    Some((stats.union_sum, stats.union_ez)),
+                )
+            }
+        };
 
-        if stats.cc == 0 {
+        if cc == 0 {
             return Some(0.0);
         }
 
         let ec = if self.high_precision {
             let n = cache.n;
-            let m = Sketch::cardinality_from_parts(stats.right_sum, stats.right_ez);
+            let m = Sketch::cardinality_from_parts(right_sum, right_ez);
 
             // Does this pair land in the slow exp-loop branch of
             // `approximate_expected_collisions`? If not, we can skip the
@@ -1129,17 +1278,15 @@ impl<'a, I: Iterator<Item = &'a Sketch>> Iterator for BatchIter<'a, I> {
             0.0
         };
 
-        if (stats.cc as f64) < ec {
+        if (cc as f64) < ec {
             return Some(0.0);
         }
 
-        let similarity = (stats.cc as f64 - ec) / stats.cn as f64;
-        Some(match self.kind {
-            BatchKind::Similarity => similarity,
-            BatchKind::Intersection => {
-                let union_card = Sketch::cardinality_from_parts(stats.union_sum, stats.union_ez);
-                similarity * union_card
-            }
+        let similarity = (cc as f64 - ec) / cn as f64;
+        Some(if let Some((union_sum, union_ez)) = union_parts {
+            similarity * Sketch::cardinality_from_parts(union_sum, union_ez)
+        } else {
+            similarity
         })
     }
 
@@ -1156,6 +1303,22 @@ struct ComparisonStats {
     left_ez: u16,
     right_sum: f64,
     right_ez: u16,
+    union_sum: f64,
+    union_ez: u16,
+}
+
+struct SimilarityStats {
+    cc: u32,
+    cn: u32,
+    left_sum: f64,
+    left_ez: u16,
+    right_sum: f64,
+    right_ez: u16,
+}
+
+struct FastIntersectionStats {
+    cc: u32,
+    cn: u32,
     union_sum: f64,
     union_ez: u16,
 }
@@ -1318,5 +1481,53 @@ mod tests {
             let value = Sketch::approximate_expected_collisions(n, THRESHOLD / 3.0);
             assert_eq!(value.to_bits(), expected, "n={:#018x}", n.to_bits());
         }
+    }
+
+    #[test]
+    fn specialized_stats_match_full_stats_bit_for_bit() {
+        fn check(left: &Sketch, right: &Sketch) {
+            let full = left.comparison_stats(right);
+            let similarity = left.similarity_stats(right);
+            assert_eq!(similarity.cc, full.cc);
+            assert_eq!(similarity.cn, full.cn);
+            assert_eq!(similarity.left_sum.to_bits(), full.left_sum.to_bits());
+            assert_eq!(similarity.left_ez, full.left_ez);
+            assert_eq!(similarity.right_sum.to_bits(), full.right_sum.to_bits());
+            assert_eq!(similarity.right_ez, full.right_ez);
+
+            let fast_intersection = left.fast_intersection_stats(right);
+            assert_eq!(fast_intersection.cc, full.cc);
+            assert_eq!(fast_intersection.cn, full.cn);
+            assert_eq!(
+                fast_intersection.union_sum.to_bits(),
+                full.union_sum.to_bits()
+            );
+            assert_eq!(fast_intersection.union_ez, full.union_ez);
+
+            let right_only = left.right_stats(right);
+            assert_eq!(right_only.cc, full.cc);
+            assert_eq!(right_only.cn, full.cn);
+            assert_eq!(right_only.right_sum.to_bits(), full.right_sum.to_bits());
+            assert_eq!(right_only.right_ez, full.right_ez);
+        }
+
+        fn check_both(left: Sketch, right: Sketch) {
+            check(&left, &right);
+            check(&right, &left);
+        }
+
+        check_both(Sketch::new(), Sketch::new());
+        check_both((0..100).collect(), (50..150).collect());
+        check_both((0..1_000).collect(), (10_000..11_000).collect());
+        check_both((0..10_000).collect(), (5_000..15_000).collect());
+        check_both(
+            Sketch {
+                regs: [0; M as usize],
+            },
+            Sketch {
+                regs: [u16::MAX; M as usize],
+            },
+        );
+        check_both((0..1_000_000).collect(), (500_000..1_500_000).collect());
     }
 }
