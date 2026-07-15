@@ -32,9 +32,10 @@
 //! assert!(sk.cardinality() > 4_900.0 && sk.cardinality() < 5_100.0);
 //!
 //!
-//! // Using `std::iter::FromIterator`
+//! // Using `std::iter::FromIterator` and `std::iter::Extend`
 //! let sketch1 = (0..10_000).collect::<Sketch>();
-//! let sketch2 = (5_000..15_000).collect::<Sketch>();
+//! let mut sketch2 = Sketch::new();
+//! sketch2.extend(5_000..15_000);
 //! assert!(sketch1.cardinality() > 9_800.0 && sketch1.cardinality() < 10_200.0);
 //! assert!(sketch2.cardinality() > 9_800.0 && sketch2.cardinality() < 10_200.0);
 //!
@@ -360,8 +361,14 @@ impl Default for Sketch {
 impl<T: hash::Hash> std::iter::FromIterator<T> for Sketch {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         let mut sk = Self::default();
-        iter.into_iter().for_each(|v| sk.add(v));
+        sk.extend(iter);
         sk
+    }
+}
+
+impl<T: hash::Hash> std::iter::Extend<T> for Sketch {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.add_many(iter);
     }
 }
 
@@ -434,6 +441,29 @@ impl Sketch {
         let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
         v.hash(&mut hasher);
         self.add_hash(hasher.digest128());
+    }
+
+    /// Add multiple elements to this `Sketch` using each element's
+    /// [`Hash`](std::hash::Hash) implementation.
+    ///
+    /// This reuses the hasher across all elements in the iterator. It is also
+    /// available through the [`Extend`](std::iter::Extend) implementation.
+    ///
+    /// ```rust
+    /// let mut sk = hyperminhash::Sketch::new();
+    ///
+    /// sk.add_many(0..1_000);
+    /// sk.extend(1_000..2_000);
+    ///
+    /// assert!(sk.cardinality() > 1_900.0 && sk.cardinality() < 2_100.0);
+    /// ```
+    pub fn add_many<T: hash::Hash>(&mut self, iter: impl IntoIterator<Item = T>) {
+        let mut hasher = xxhash_rust::xxh3::Xxh3Default::new();
+        for v in iter {
+            v.hash(&mut hasher);
+            self.add_hash(hasher.digest128());
+            hasher.reset();
+        }
     }
 
     /// Add a single element using the content of the given `io::Read`
@@ -1385,6 +1415,21 @@ mod tests {
         sk.add(0);
         assert!(!sk.is_empty());
         assert_ne!(sk.cardinality(), 0.0);
+    }
+
+    #[test]
+    fn add_many_and_extend_match_repeated_add() {
+        let mut repeated = Sketch::new();
+        for value in 0..10_000 {
+            repeated.add(value);
+        }
+
+        let mut many = Sketch::new();
+        many.add_many(0..5_000);
+        many.extend(5_000..10_000);
+
+        assert_eq!(many, repeated);
+        assert_eq!(many, (0..10_000).collect());
     }
 
     #[test]
