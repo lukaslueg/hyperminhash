@@ -87,6 +87,7 @@ const TR: u32 = 1 << R;
 const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
+const _: () = assert!(M <= u16::MAX as u32);
 const IS_EMPTY_CHUNK_REGISTERS: usize = 16;
 const _: () = assert!((M as usize).is_multiple_of(IS_EMPTY_CHUNK_REGISTERS));
 
@@ -588,28 +589,17 @@ impl Sketch {
         ALPHA * (f64::from(M)) * ((f64::from(M)) - f64::from(ez)) / (beta(ez) + sum)
     }
 
-    fn overlap_counts(&self, other: &Self) -> (u32, u32) {
-        // Branchless, fixed-chunk formulation to encourage LLVM to emit
-        // u16-wide SIMD (NEON `cmeq`/`sub`, SSE2 `pcmpeqw`/`psubw`).
-        // Per-lane u16 accumulators cap at `M / LANES = 1024` which fits
-        // in u16 with headroom.
-        const LANES: usize = 16;
-        let mut cc_lanes = [0u16; LANES];
-        let mut cn_lanes = [0u16; LANES];
-        for (lc, rc) in self
-            .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
-        {
-            for i in 0..LANES {
-                let l = lc[i];
-                let r = rc[i];
-                cn_lanes[i] += u16::from((l | r) != 0);
-                cc_lanes[i] += u16::from((l == r) & (l != 0));
-            }
+    fn overlap_counts(&self, other: &Self) -> (u16, u16) {
+        // Keep this as a flat reduction. LLVM can use contiguous SIMD loads
+        // and accumulate in eight u16 lanes, whereas a nested fixed-lane
+        // formulation can make it vectorize across chunks and assemble
+        // vectors from strided scalar loads.
+        let mut cc = 0u16;
+        let mut cn = 0u16;
+        for (&l, &r) in self.regs.iter().zip(other.regs.iter()) {
+            cn += u16::from((l | r) != 0);
+            cc += u16::from((l == r) & (l != 0));
         }
-        let cc: u32 = cc_lanes.iter().map(|&x| u32::from(x)).sum();
-        let cn: u32 = cn_lanes.iter().map(|&x| u32::from(x)).sum();
         (cc, cn)
     }
 
@@ -957,23 +947,6 @@ impl Sketch {
         }
     }
 
-    fn similarity_impl(&self, other: &Self, high_precision: bool) -> f64 {
-        if high_precision {
-            return Self::high_precision_similarity_from_stats(
-                self.similarity_stats(other),
-                Self::approximate_expected_collisions,
-            );
-        }
-
-        let (cc, cn) = self.overlap_counts(other);
-
-        if cc == 0 {
-            return 0.0;
-        }
-
-        cc as f64 / cn as f64
-    }
-
     fn high_precision_similarity_from_stats(
         stats: SimilarityStats,
         expected_collisions: impl FnOnce(f64, f64) -> f64,
@@ -1009,7 +982,10 @@ impl Sketch {
         if self == other {
             return 1.0;
         }
-        self.similarity_impl(other, true)
+        Self::high_precision_similarity_from_stats(
+            self.similarity_stats(other),
+            Self::approximate_expected_collisions,
+        )
     }
 
     /// A faster Jaccard Index estimate with a slightly looser correction model.
@@ -1021,7 +997,11 @@ impl Sketch {
         if self == other {
             return 1.0;
         }
-        self.similarity_impl(other, false)
+        let (cc, cn) = self.overlap_counts(other);
+        if cc == 0 {
+            return 0.0;
+        }
+        cc as f64 / cn as f64
     }
 
     /// The approximate number of elements in both sets
