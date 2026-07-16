@@ -89,7 +89,7 @@ const C: f64 = 0.169_919_487_159_739_1;
 
 type Regs = [u16; M as usize];
 const _: () = assert!(M <= u16::MAX as u32);
-const IS_EMPTY_CHUNK_REGISTERS: usize = 16;
+const IS_EMPTY_CHUNK_REGISTERS: usize = 64;
 const _: () = assert!((M as usize).is_multiple_of(IS_EMPTY_CHUNK_REGISTERS));
 
 /// The exact size, in bytes, of a serialized [`Sketch`].
