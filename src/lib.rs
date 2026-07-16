@@ -621,7 +621,7 @@ impl Sketch {
 
     fn overlap_counts(&self, other: &Self) -> (u16, u16) {
         // Keep this as a flat reduction. LLVM can use contiguous SIMD loads
-        // and accumulate in eight u16 lanes, whereas a nested fixed-lane
+        // and accumulate in packed u16 lanes, whereas a nested fixed-lane
         // formulation can make it vectorize across chunks and assemble
         // vectors from strided scalar loads.
         let mut cc = 0u16;
@@ -1415,6 +1415,17 @@ mod tests {
         sk.add(0);
         assert!(!sk.is_empty());
         assert_ne!(sk.cardinality(), 0.0);
+    }
+
+    #[test]
+    fn overlap_counts_fit_in_u16_at_the_register_limit() {
+        let left = Sketch {
+            regs: [1; M as usize],
+        };
+        let mut right = left.clone();
+        right.regs[0] = 2;
+
+        assert_eq!(left.overlap_counts(&right), ((M - 1) as u16, M as u16));
     }
 
     #[test]
