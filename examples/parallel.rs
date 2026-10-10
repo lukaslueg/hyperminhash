@@ -10,10 +10,11 @@ use std::{
 
 type Synced<T> = Arc<Mutex<T>>;
 type AsyncResult<T, E> = Result<Synced<T>, E>;
+type Worker<T, E> = (Synced<T>, thread::JoinHandle<AsyncResult<T, E>>);
 
 #[derive(Debug)]
 struct AsyncSink<T, E> {
-    t: Vec<(Synced<T>, thread::JoinHandle<AsyncResult<T, E>>)>,
+    t: Vec<Worker<T, E>>,
 }
 
 impl<T, E> AsyncSink<T, E>

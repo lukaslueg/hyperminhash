@@ -790,6 +790,7 @@ fn draw_plot(plot: PlotSpec<'_>, off_x: f64, off_y: f64) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_series<F>(
     plot: PlotSpec<'_>,
     name: &str,

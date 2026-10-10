@@ -155,7 +155,9 @@ fn bench_disjoint_similarity(c: &mut criterion::Criterion) {
         const REGISTERS: usize = 1 << 14;
         let mut bytes = vec![0; REGISTERS * size_of::<u16>()];
         for register in bytes
-            .chunks_exact_mut(size_of::<u16>())
+            .as_chunks_mut::<{ size_of::<u16>() }>()
+            .0
+            .iter_mut()
             .skip(start)
             .take(count)
         {

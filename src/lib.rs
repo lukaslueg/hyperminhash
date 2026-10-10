@@ -385,6 +385,66 @@ impl Sketch {
         Self::default()
     }
 
+    /// Construct an empty `Sketch` in a freshly allocated `Box`
+    ///
+    /// A `Sketch` is relatively large, and holding many locals of type `Sketch` may overflow
+    /// the stack, leading to panic, especially in recursive functions. Even when allocating
+    /// `Sketch` on the heap, the compiler may not elide constructing an empty `Sketch` on
+    /// the stack before moving it to the heap. Use this function to ensure that `Sketch`
+    /// is directly constructed on the heap even in unoptimized debug-builds.
+    /// ```rust
+    /// use hyperminhash::Sketch;
+    ///
+    /// let boxed_sk: Box<Sketch> = Sketch::new_boxed();
+    /// assert!(boxed_sk.is_empty());
+    /// ```
+    pub fn new_boxed() -> Box<Self> {
+        let mut place = Box::new_uninit();
+        Sketch::init(&mut place);
+        unsafe {
+            // Safety: We called `init()`
+            place.assume_init()
+        }
+    }
+
+    /// Initialize the `Sketch` at an uninitialized place
+    ///
+    /// After calling this function, a `MaybeUninit<Sketch>` is safe to `assume_init()`.
+    /// ```rust
+    /// use std::mem::MaybeUninit;
+    /// use hyperminhash::Sketch;
+    ///
+    /// // Allocate some place, using some allocator
+    /// let mut uninit: Box<MaybeUninit<[Sketch; 16]>> = Box::new_uninit();
+    ///
+    /// // Initialize the Sketches
+    /// let places: &mut [MaybeUninit<Sketch>; 16] = uninit.as_mut().as_mut();
+    /// for place in places {
+    ///     Sketch::init(place);
+    /// }
+    ///
+    /// let mut sketches = unsafe {
+    ///     // Safety: We called `init()` on each element of the array
+    ///     uninit.assume_init()
+    /// };
+    ///
+    /// assert!(sketches.iter().all(|sk| sk.is_empty()));
+    /// sketches[15].add(1);
+    /// assert!(!sketches[15].is_empty());
+    /// ```
+    pub fn init(place: &mut std::mem::MaybeUninit<Self>) -> &mut Self {
+        let raw_sk = place.as_mut_ptr();
+        unsafe {
+            // Safety: the raw pointer is derived from a &mut MaybeUninit<Self>, so its aligned and valid to write.
+            // We're not creating a full-blown reference for the projection. Zero is a valid state for u16.
+            let regs_ptr = &raw mut (*raw_sk).regs;
+            std::ptr::write_bytes(regs_ptr, 0, 1);
+
+            // Safety: The one and only field was initialized
+            place.assume_init_mut()
+        }
+    }
+
     /// Returns `true` if this Sketch has a cardinality of exactly zero
     ///
     /// ```rust
@@ -398,7 +458,9 @@ impl Sketch {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.regs
-            .chunks_exact(IS_EMPTY_CHUNK_REGISTERS)
+            .as_chunks::<IS_EMPTY_CHUNK_REGISTERS>()
+            .0
+            .iter()
             .all(|chunk| {
                 chunk
                     .iter()
@@ -447,7 +509,7 @@ impl Sketch {
     /// [`Hash`](std::hash::Hash) implementation.
     ///
     /// This reuses the hasher across all elements in the iterator. It is also
-    /// available through the [`Extend`](std::iter::Extend) implementation.
+    /// available through the [`Extend`] implementation.
     ///
     /// ```rust
     /// let mut sk = hyperminhash::Sketch::new();
@@ -563,7 +625,7 @@ impl Sketch {
         const LANES: usize = 8;
         let mut sums = [0.0f64; LANES];
         let mut ezs = [0u16; LANES];
-        for chunk in self.regs.chunks_exact(LANES) {
+        for chunk in self.regs.as_chunks::<LANES>().0 {
             for i in 0..LANES {
                 let lz = Self::lz(chunk[i]);
                 sums[i] += L[lz as usize];
@@ -659,8 +721,10 @@ impl Sketch {
 
         for (lc, rc) in self
             .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
+            .as_chunks::<LANES>()
+            .0
+            .iter()
+            .zip(other.regs.as_chunks::<LANES>().0)
         {
             // Phase A: pure u16 work.
             let mut left_lz = [0u8; LANES];
@@ -715,8 +779,10 @@ impl Sketch {
 
         for (lc, rc) in self
             .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
+            .as_chunks::<LANES>()
+            .0
+            .iter()
+            .zip(other.regs.as_chunks::<LANES>().0)
         {
             let mut left_lz = [0u8; LANES];
             let mut right_lz = [0u8; LANES];
@@ -760,8 +826,10 @@ impl Sketch {
 
         for (lc, rc) in self
             .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
+            .as_chunks::<LANES>()
+            .0
+            .iter()
+            .zip(other.regs.as_chunks::<LANES>().0)
         {
             let mut union_lz = [0u8; LANES];
             for i in 0..LANES {
@@ -904,8 +972,10 @@ impl Sketch {
 
         for (lc, rc) in self
             .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
+            .as_chunks::<LANES>()
+            .0
+            .iter()
+            .zip(other.regs.as_chunks::<LANES>().0)
         {
             let mut right_lz = [0u8; LANES];
             let mut union_lz = [0u8; LANES];
@@ -951,8 +1021,10 @@ impl Sketch {
 
         for (lc, rc) in self
             .regs
-            .chunks_exact(LANES)
-            .zip(other.regs.chunks_exact(LANES))
+            .as_chunks::<LANES>()
+            .0
+            .iter()
+            .zip(other.regs.as_chunks::<LANES>().0)
         {
             let mut right_lz = [0u8; LANES];
             for i in 0..LANES {
