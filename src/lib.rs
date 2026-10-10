@@ -1246,8 +1246,15 @@ impl Sketch {
     /// # Ok::<(), std::io::Error>(())
     /// ```
     pub fn save(&self, mut writer: impl std::io::Write) -> std::io::Result<()> {
-        for r in self.regs {
-            writer.write_all(&r.to_le_bytes())?;
+        const BUFFER_SIZE: usize = 2048;
+        let mut buffer = [0u8; BUFFER_SIZE];
+        // Pack registers before writing to avoid thousands of tiny I/O operations.
+        for registers in self.regs.chunks(BUFFER_SIZE / 2) {
+            let bytes = &mut buffer[..registers.len() * 2];
+            for (register, pair) in registers.iter().zip(bytes.as_chunks_mut::<2>().0) {
+                pair.copy_from_slice(&register.to_le_bytes());
+            }
+            writer.write_all(bytes)?;
         }
         Ok(())
     }
