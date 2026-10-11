@@ -338,6 +338,16 @@ impl std::fmt::Debug for Entry {
 
 /// Records the approximate number of unique elements it has seen over it's lifetime.
 #[derive(Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+#[cfg_attr(
+    feature = "zerocopy",
+    derive(
+        zerocopy::FromBytes,
+        zerocopy::IntoBytes,
+        zerocopy::KnownLayout,
+        zerocopy::Immutable
+    )
+)]
 pub struct Sketch {
     regs: Regs,
 }

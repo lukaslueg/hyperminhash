@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check
+      - run: cargo check --all-features
 
   clippy:
     name: cargo clippy
@@ -29,7 +30,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --all --tests -- -D warnings
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: cargo test
@@ -38,6 +39,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+      - run: cargo test --all-features
 
   semver:
     name: Semver check

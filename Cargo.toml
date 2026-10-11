@@ -13,6 +13,7 @@ exclude = [ "examples/drift.png" ]
 
 [dependencies]
 xxhash-rust = { version = "0.8", features = [ "std", "xxh3" ] }
+zerocopy = { version = "0.8", optional = true, features = [ "derive", "alloc" ] }
 
 [dev-dependencies]
 rand = "0.10"
@@ -23,6 +24,7 @@ walkdir = "2"
 
 [features]
 default = []
+zerocopy = [ "dep:zerocopy" ]
 
 
 [[bench]]
