@@ -379,18 +379,18 @@ impl PartialOrd for Sketch {
 }
 
 impl Sketch {
-    /// Construct an empty `Sketch`
+    /// Construct an empty [`Sketch`]
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Construct an empty `Sketch` in a freshly allocated `Box`
+    /// Construct an empty [`Sketch`] in a freshly allocated `Box`
     ///
-    /// A `Sketch` is relatively large, and holding many locals of type `Sketch` may overflow
+    /// A [`Sketch`] is relatively large, and holding many locals of type [`Sketch`] may overflow
     /// the stack, leading to panic, especially in recursive functions. Even when allocating
-    /// `Sketch` on the heap, the compiler may not elide constructing an empty `Sketch` on
-    /// the stack before moving it to the heap. Use this function to ensure that `Sketch`
+    /// [`Sketch`] on the heap, the compiler may not elide constructing an empty [`Sketch`] on
+    /// the stack before moving it to the heap. Use this function to ensure that [`Sketch`]
     /// is directly constructed on the heap even in unoptimized debug-builds.
     /// ```rust
     /// use hyperminhash::Sketch;
@@ -407,9 +407,13 @@ impl Sketch {
         }
     }
 
-    /// Initialize the `Sketch` at an uninitialized place
+    /// Initialize a [`Sketch`] at an uninitialized place.
     ///
-    /// After calling this function, a `MaybeUninit<Sketch>` is safe to `assume_init()`.
+    /// Similar to [`Sketch::new_boxed()`], this function can be used to construct a [`Sketch`]
+    /// without materializing a temporary value on the stack, even in debug-builds.
+    ///
+    /// After calling this function, the `MaybeUninit<Sketch>` is safe to `assume_init()`, and in a
+    /// state that is equivalent to [`Sketch::new()`].
     /// ```rust
     /// use std::mem::MaybeUninit;
     /// use hyperminhash::Sketch;
